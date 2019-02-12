@@ -15,9 +15,7 @@
 		"onLanguage:pug"
 	],
 	"main": "./out/extension.js",
-	"contributes": {
-
-	},
+	"contributes": {},
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
 		"compile": "tsc -p ./",
@@ -35,5 +33,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/tmjusan/vscode-race-angular-plugin"
-	}
+	},
+	"license": "MIT"
 }

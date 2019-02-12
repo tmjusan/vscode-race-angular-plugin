@@ -346,6 +346,27 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         return result;
     }
 
+    private _checkTagAttributeSelectorUri(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
+        const tagSelectorRegex = new RegExp(this._tagSelectorRegex, "gm");
+        const wordRange = document.getWordRangeAtPosition(position, tagSelectorRegex);
+        let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
+
+        if (wordRange !== null && wordRange !== undefined) {
+            const line = document.lineAt(wordRange.start);
+            let tagMatch = /^(?:(?!include|\.)(?:\s+)?([a-zA-Z0-9_-]+))/.exec(line.text);
+            if (tagMatch) {
+                const tagName = tagMatch[1];
+                const originSelectionRange: vscode.Range = new vscode.Range(
+                    new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex),
+                    new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex + (tagName && tagName.length || 0))
+                );
+                result = this._findLocationsWithTagName(tagName, originSelectionRange, token);
+            }
+        }
+
+        return result;
+    }
+
     provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.LocationLink[]> {
         return this._checkIncludesUri(document, position, token) || 
             this._checkMixinsUri(document, position, token) || 
