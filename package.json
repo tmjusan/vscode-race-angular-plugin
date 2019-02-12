@@ -1,7 +1,7 @@
 {
-	"name": "ctrl-click-open-file",
-	"displayName": "Ctrl+click open file",
-	"description": "Open file by ctrl+click in source code",
+	"name": "vscode-race-angular-plugin",
+	"displayName": "Race angular plugin",
+	"description": "Open files by ctrl+click in source code",
 	"version": "0.0.1",
 	"engines": {
 		"vscode": "^1.31.0"
@@ -31,5 +31,9 @@
 		"tslint": "^5.12.1",
 		"@types/node": "^10.12.21",
 		"@types/mocha": "^2.2.42"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/tmjusan/vscode-race-angular-plugin"
 	}
 }
