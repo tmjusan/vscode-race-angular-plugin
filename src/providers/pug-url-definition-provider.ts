@@ -528,7 +528,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
 
         if (wordRange !== null && wordRange !== undefined) {
             const line = document.lineAt(wordRange.start);
-            const checkRegex = new RegExp(`${attributeName.replace(/(\[|\(|\]|\))/g, '\\$1')}(?:(?:\\s+)*=(?:\\s+)*(?:require\\()?((["'])[^\\n\\r,]+\\2\\)?)?|\\,|(?:\\s+)?\\))`, "g");
+            const checkRegex = new RegExp(`${attributeName.replace(/(\[|\(|\]|\))/g, '\\$1')}(?:(?:\\s+)*=(?:\\s+)*(?:require\\()?((["'])(?:[^\\n\\r,]+|([\\[{])[^\\n\\r]+[\\]}])\\2\\)?)?|\\,|(?:\\s+)?\\))`, "g");
             const match = checkRegex.exec(line.text);
             if (match) {
                 if (match[1] === null || match[1] === undefined) {
