@@ -3,11 +3,15 @@ import { getFileLocationOrNull } from '../utils/get-file-location-or-null';
 import { getFullPathOrNull } from '../utils/get-full-path-or-null';
 import { CheckFileResult } from '../interfaces/check-file-result';
 import { clearTimeout } from 'timers';
+import { FindSelectorResult } from '../interfaces/find-selector-result';
+import { FindLocationResult } from '../interfaces/find-location-result';
 
 export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
 
-    private readonly _tagSelectorRegex = /^((?!include|\.)(?:\s+)?[a-zA-Z0-9_-]+)((?:\.[a-zA-Z_-]+)+)?((?:\s+)?\((?:(?:(?:\s+)?[^\s]+(?:\s+)?=(?:\s+)?(?:(?:(['"])[^\n\r]+\4)|(?:require(?:\s+)?\(["'][^\s"']+["']\)))\,?)|(?:(?:\s+)?(?:#|)[a-zA-Z-_]+)\,?(?:\s+)?)+\))?/gm;
-
+    private readonly _tagNameRegex = /^(?!include|\.|#|\/\/)(?:\s+)?([a-zA-Z0-9_$-]+)((?:\.[a-zA-Z_-]+)+)?(?:\(|\s|$)[^,\)]/gm;
+    private readonly _tagAttributesRegex = /[a-zA-Z_$]((?:\s+)?\((?:(?:(?:\s+)?[^\s]+(?:\s+)?=(?:\s+)?(?:(?:(['"])[^\n\r]+\2)|(?:require(?:\s+)?\(["'][^\s"']+["']\)))\,?)|(?:(?:\s+)?(?:#|)[a-zA-Z-_]+)\,?(?:\s+)?)+\))/gm;
+    private readonly _attributeSelectorRegex = /(\[[$a-zA-Z0-9_]+\]|\[\([$a-zA-Z0-9_]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_]+)(?:(?:\s+)*=(?:\s+)*((["'])[^\n\r]+\3)?|\,|(?:\s+)?\))/g;
+    
     private readonly _tagUriCache: {[tagName: string]: Array<vscode.Uri>} = {};
     private _tagClearCacheTimeout: {[tagName: string]: NodeJS.Timeout} = {};
     
@@ -199,7 +203,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
             }
             vscode.workspace.openTextDocument(uri)
                 .then(document => {
-                    const tagRegex = new RegExp(`@(Component|Directive)(?:\\s+)?\\((?:\\s+)?\\{(?:[^]+)?selector(?:\\s+)?:(?:\\s+)?([\'\"])${tagName}\\2\\,?(?:[^]+)?\\}(?:\\s+)?\\)`, "i");
+                    const tagRegex = new RegExp(`@(Component|Directive)(?:\\s+)?\\((?:\\s+)?\\{(?:[^]+)?selector(?:\\s+)?:(?:\\s+)?([\'\"])${tagName.replace(/(\[|\(|\]|\))/g, '\\$1')}\\2\\,?(?:[^]+)?\\}(?:\\s+)?\\)`, "i");
                     const match = tagRegex.exec(document.getText());
                     if (match) {
                         const startPosition = document.positionAt(match.index);
@@ -266,14 +270,20 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         });
     }
 
-    private _findLocationsWithTagName(tag: string, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null>  {
+    private _findLocationsWithSelector(tag: string, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<FindLocationResult>  {
         if (tag === null || tag === undefined) {
-            return Promise.resolve(null);
+            return Promise.resolve({
+                selector: tag,
+                links: null
+            });
         }
-        return new Promise<Array<vscode.LocationLink> | null>(resolve => {
+        return new Promise<FindLocationResult>(resolve => {
             this._findLocationWithTagNameCached(tag, originSelectionRange, token)
                 .then(results => {
-                    resolve(results);
+                    resolve({
+                        selector: tag, 
+                        links: results
+                    });
                 })
                 .catch(() => {
                     vscode.workspace.findFiles("**/*.{component,directive}.ts", "node_modules/*")
@@ -311,23 +321,92 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                                         this._tagClearCacheTimeout[tag] = setTimeout(() => {
                                             delete this._tagUriCache[tag];
                                             delete this._tagClearCacheTimeout[tag];
-                                        }, 60 * 1000); // cache for 1 minute
+                                        }, 10 * 60 * 1000); // cache for 10 minutes
                                     }
-                                    resolve(result);
+                                    resolve({
+                                        selector: tag, 
+                                        links: result
+                                    });
                                 }).catch(errors => {
                                     if (errors !== null && errors !== undefined) {
                                         console.error(errors);
                                     }
-                                    resolve(null);
+                                    resolve({
+                                        selector: tag, 
+                                        links: result
+                                    });
                                 });
                         });
                 });
         });
     }
 
+    private _findAttributeWithSelector(uri: vscode.Uri, attribute: string, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<CheckFileResult>  {
+        if (attribute === null || attribute === undefined || token.isCancellationRequested) {
+            return Promise.resolve({
+                uri: uri,
+                location: null
+            });
+        }
+        return new Promise<CheckFileResult>(resolve => {
+            vscode.workspace.openTextDocument(uri)
+                .then(document => {
+                    const selectorName: string = attribute.replace(/(\[|\(|\]|\))/g, '');
+                    const attributrSelectorRegex = new RegExp(`@(Input|Output|Optional)\\((?:(['"])${selectorName}\\2)\\)(?:\\s+)([\\w]+)`, "gi");
+                    const attributrNameRegex = new RegExp(`@(Input|Output|Optional)\\((?:\\s+)?\\)(?:\\s+)${selectorName}`, "gi");
+                    const selectorMatch = attributrSelectorRegex.exec(document.getText());
+                    const nameMatch = attributrNameRegex.exec(document.getText());
+                    if (selectorMatch) {
+                        const startPosition = document.positionAt(selectorMatch.index + selectorMatch[0].length - (selectorMatch[3] ? selectorMatch[3].length : 1));
+                        const endPosition = document.positionAt(selectorMatch.index + selectorMatch[0].length);
+                        const link: vscode.LocationLink = {
+                            originSelectionRange: originSelectionRange,
+                            targetUri: vscode.Uri.file(document.fileName),
+                            targetRange: new vscode.Range(startPosition, endPosition),
+                            targetSelectionRange: new vscode.Range(startPosition, 
+                                new vscode.Position(
+                                    startPosition.line, 
+                                    document.lineAt(startPosition.line).text.length
+                                    )
+                                )
+                        };
+                        resolve({
+                            uri: uri,
+                            location: link
+                        });
+                    } else if (nameMatch) {
+                        const startPosition = document.positionAt(nameMatch.index + nameMatch[0].length - selectorName.length);
+                        const endPosition = document.positionAt(nameMatch.index + nameMatch[0].length);
+                        const link: vscode.LocationLink = {
+                            originSelectionRange: originSelectionRange,
+                            targetUri: vscode.Uri.file(document.fileName),
+                            targetRange: new vscode.Range(startPosition, endPosition),
+                            targetSelectionRange: new vscode.Range(startPosition, 
+                                new vscode.Position(
+                                    startPosition.line, 
+                                    document.lineAt(startPosition.line).text.length
+                                    )
+                                )
+                        };
+                        resolve({
+                            uri: uri,
+                            location: link
+                        });
+                    } else {
+                        resolve({uri: uri, location: null});
+                    }
+                }, () => {
+                    resolve({
+                        uri: uri,
+                        location: null
+                    });
+                });
+        });
+    }
+
     private _checkNgSelectorUri(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
-        const tagSelectorRegex = new RegExp(this._tagSelectorRegex, "gm");
-        const wordRange = document.getWordRangeAtPosition(position, tagSelectorRegex);
+        const tagNameRegex = /^(?:\s+)?([a-zA-Z0-9_$-]+)((?:\.[a-zA-Z_-]+)+)?(?:\(|\s|$)[^,\)]*/;
+        const wordRange = document.getWordRangeAtPosition(position, tagNameRegex);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
 
         if (wordRange !== null && wordRange !== undefined) {
@@ -339,38 +418,182 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                     new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex),
                     new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex + (tagName && tagName.length || 0))
                 );
-                result = this._findLocationsWithTagName(tagName, originSelectionRange, token);
+                result = this._findLocationsWithSelector(tagName, originSelectionRange, token)
+                    .then(result => result.links);
             }
         }
 
         return result;
     }
 
+    private _findSelectorName(document: vscode.TextDocument, position: vscode.Position): FindSelectorResult {
+        let result: FindSelectorResult = {
+            tag: null,
+            attribute: null
+        };
+        const tagNameRegex = new RegExp(this._tagNameRegex, "gm");
+        const attributeSelectorRegex = new RegExp(this._attributeSelectorRegex, "g");
+        const isEndOfDeclaration = (line: string): boolean => {
+            let result: boolean = false;
+            let openedCount: number = 0;
+            tagNameRegex.lastIndex = 0;
+            if (tagNameRegex.test(line)) {
+                tagNameRegex.lastIndex = 0;
+                result = true;
+            } else {
+                for (let i = 0, l = line.length; i < l; ++i) {
+                    if (line[i] === ')') {
+                        if (--openedCount < 0) {
+                            result = true;
+                            break;
+                        }
+                    } else if (line[i] === '(') {
+                        ++openedCount;
+                    }
+                }
+            }
+            return result;
+        };
+        const isBeginningOfDeclaration = (line: string): boolean => {
+            return /^(?:\s+)?[.#a-zA-Z_-]+\(/.test(line);
+        };
+        let searchText = document.lineAt(position.line).text;
+        let upLine: number = position.line;
+        let downLine: number = position.line;
+        let tagMatch = tagNameRegex.exec(searchText);
+        let attributeMatch = attributeSelectorRegex.exec(searchText);
+        let foundTag: string | null = tagMatch && tagMatch[1] || null;
+        let foundAttribute: string | null = attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
+        let range: vscode.Range = new vscode.Range(
+            new vscode.Position(upLine, 0),
+            new vscode.Position(downLine, 0)
+        );
+        let wentToEnd: boolean = false;
+        let wentToBeginning: boolean = false;
+        let count: number = 0;
+        while(foundAttribute === null && downLine < document.lineCount - 1 && !wentToEnd) {
+            tagNameRegex.lastIndex = 0;
+            attributeSelectorRegex.lastIndex = 0;
+            range = new vscode.Range(
+                new vscode.Position(upLine, 0),
+                new vscode.Position(downLine, document.lineAt(Math.min(downLine, document.lineCount)).text.length)
+            );
+            searchText = document.getText(document.validateRange(range));
+            tagMatch = tagNameRegex.exec(searchText);
+            attributeMatch = attributeSelectorRegex.exec(searchText);
+            foundTag = foundTag || tagMatch && tagMatch[1] || null;
+            foundAttribute = foundAttribute || attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
+            if (isEndOfDeclaration(document.lineAt(downLine).text)) {
+                wentToEnd = true;
+            } else {
+                downLine++;
+            }
+            if (++count > 100) {
+                break;
+            }
+        }
+        while(foundTag === null && upLine > 0 && !wentToBeginning) {
+            tagNameRegex.lastIndex = 0;
+            attributeSelectorRegex.lastIndex = 0;
+            range = new vscode.Range(
+                new vscode.Position(upLine, 0),
+                new vscode.Position(downLine, document.lineAt(Math.min(downLine, document.lineCount)).text.length)
+            );
+            searchText = document.getText(document.validateRange(range));
+            tagMatch = tagNameRegex.exec(searchText);
+            attributeMatch = attributeSelectorRegex.exec(searchText);
+            foundTag = foundTag || tagMatch && tagMatch[1] || null;
+            foundAttribute = foundAttribute || attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
+            if (isBeginningOfDeclaration(document.lineAt(upLine).text)) {
+                wentToBeginning = true;
+            } else {
+                upLine--;
+            }
+            if (++count > 100) {
+                break;
+            }
+        }
+        result = {
+            tag: foundTag, 
+            attribute: foundAttribute
+        };
+        return result;
+    }
+
     private _checkTagAttributeSelectorUri(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
-        const tagSelectorRegex = new RegExp(this._tagSelectorRegex, "gm");
-        const wordRange = document.getWordRangeAtPosition(position, tagSelectorRegex);
+        const attributeSelectorRegex = /\[[$a-zA-Z0-9_]+\]|\[\([$a-zA-Z0-9_]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_]+/;
+        const wordRange = document.getWordRangeAtPosition(position, attributeSelectorRegex);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
+        const attributeName = document.getText(wordRange);
 
         if (wordRange !== null && wordRange !== undefined) {
             const line = document.lineAt(wordRange.start);
-            let tagMatch = /^(?:(?!include|\.)(?:\s+)?([a-zA-Z0-9_-]+))/.exec(line.text);
-            if (tagMatch) {
-                const tagName = tagMatch[1];
-                const originSelectionRange: vscode.Range = new vscode.Range(
-                    new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex),
-                    new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex + (tagName && tagName.length || 0))
-                );
-                result = this._findLocationsWithTagName(tagName, originSelectionRange, token);
+            const checkRegex = new RegExp(`${attributeName.replace(/(\[|\(|\]|\))/g, '\\$1')}(?:(?:\\s+)*=(?:\\s+)*(?:require\\()?((["'])[^\\n\\r,]+\\2\\)?)?|\\,|(?:\\s+)?\\))`, "g");
+            const match = checkRegex.exec(line.text);
+            if (match) {
+                if (match[1] === null || match[1] === undefined) {
+                    if (!attributeName.startsWith('[')) {
+                        result = this._findLocationsWithSelector(`[${attributeName}]`, wordRange, token)
+                            .then(result => result.links);
+                    } else {
+                        result = this._findLocationsWithSelector(attributeName, wordRange, token)
+                            .then(result => result.links);
+                    }
+                } else {
+                    const selector = this._findSelectorName(document, position);
+                    let searchTasks: Array<Promise<FindLocationResult>> = [];
+                    if (selector.tag) {
+                        searchTasks.push(this._findLocationsWithSelector(selector.tag, wordRange, token));
+                    }
+                    if (selector.attribute !== null && selector.attribute !== undefined) {
+                        if (!selector.attribute.startsWith('[')) {
+                            searchTasks.push(this._findLocationsWithSelector(`[${selector.attribute}]`, wordRange, token));
+                        } else {
+                            searchTasks.push(this._findLocationsWithSelector(selector.attribute, wordRange, token));
+                        }
+                    }
+                    result = new Promise<Array<vscode.LocationLink> | null>(resolve => {
+                        Promise.all(searchTasks)
+                            .then(results => {
+                                let searchAttributeTasks: Array<Promise<CheckFileResult>> = [];
+                                for (let taskResult of results) {
+                                    if (taskResult.links) {
+                                        for (let location of taskResult.links) {
+                                            searchAttributeTasks.push(this._findAttributeWithSelector(location.targetUri, attributeName, wordRange, token));
+                                        }
+                                    }
+                                }
+                                Promise.all(searchAttributeTasks)
+                                    .then(attributeResults => {
+                                        let locations: Array<vscode.LocationLink> = [];
+                                        for (let result of attributeResults) {
+                                            if (result.location !== null && result.location !== undefined) {
+                                                locations.push(result.location);
+                                            }
+                                        }
+                                        if (locations.length > 0) {
+                                            resolve(locations);
+                                        } else {
+                                            resolve(null);
+                                        }
+                                    }).catch(() => {
+                                        resolve(null);
+                                    });
+                            }).catch(() => {
+                                resolve(null);
+                            });
+                    });
+                }
             }
         }
-
         return result;
     }
 
     provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.LocationLink[]> {
         return this._checkIncludesUri(document, position, token) || 
-            this._checkMixinsUri(document, position, token) || 
-            this._checkNgSelectorUri(document, position, token);
+            this._checkMixinsUri(document, position, token) ||
+            this._checkNgSelectorUri(document, position, token) ||
+            this._checkTagAttributeSelectorUri(document, position, token);
     }
 
 }

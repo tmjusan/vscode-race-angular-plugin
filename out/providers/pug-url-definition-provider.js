@@ -6,7 +6,9 @@ const get_full_path_or_null_1 = require("../utils/get-full-path-or-null");
 const timers_1 = require("timers");
 class PugUrlDefinitionProvider {
     constructor() {
-        this._tagSelectorRegex = /^((?!include|\.)(?:\s+)?[a-zA-Z0-9_-]+)((?:\.[a-zA-Z_-]+)+)?((?:\s+)?\((?:(?:(?:\s+)?[^\s]+(?:\s+)?=(?:\s+)?(?:(?:(['"])[^\n\r]+\4)|(?:require(?:\s+)?\(["'][^\s"']+["']\)))\,?)|(?:(?:\s+)?(?:#|)[a-zA-Z-_]+)\,?(?:\s+)?)+\))?/gm;
+        this._tagNameRegex = /^(?!include|\.|#|\/\/)(?:\s+)?([a-zA-Z0-9_$-]+)((?:\.[a-zA-Z_-]+)+)?(?:\(|\s|$)[^,\)]/gm;
+        this._tagAttributesRegex = /[a-zA-Z_$]((?:\s+)?\((?:(?:(?:\s+)?[^\s]+(?:\s+)?=(?:\s+)?(?:(?:(['"])[^\n\r]+\2)|(?:require(?:\s+)?\(["'][^\s"']+["']\)))\,?)|(?:(?:\s+)?(?:#|)[a-zA-Z-_]+)\,?(?:\s+)?)+\))/gm;
+        this._attributeSelectorRegex = /(\[[$a-zA-Z0-9_]+\]|\[\([$a-zA-Z0-9_]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_]+)(?:(?:\s+)*=(?:\s+)*((["'])[^\n\r]+\3)?|\,|(?:\s+)?\))/g;
         this._tagUriCache = {};
         this._tagClearCacheTimeout = {};
     }
@@ -188,7 +190,7 @@ class PugUrlDefinitionProvider {
             }
             vscode.workspace.openTextDocument(uri)
                 .then(document => {
-                const tagRegex = new RegExp(`@(Component|Directive)(?:\\s+)?\\((?:\\s+)?\\{(?:[^]+)?selector(?:\\s+)?:(?:\\s+)?([\'\"])${tagName}\\2\\,?(?:[^]+)?\\}(?:\\s+)?\\)`, "i");
+                const tagRegex = new RegExp(`@(Component|Directive)(?:\\s+)?\\((?:\\s+)?\\{(?:[^]+)?selector(?:\\s+)?:(?:\\s+)?([\'\"])${tagName.replace(/(\[|\(|\]|\))/g, '\\$1')}\\2\\,?(?:[^]+)?\\}(?:\\s+)?\\)`, "i");
                 const match = tagRegex.exec(document.getText());
                 if (match) {
                     const startPosition = document.positionAt(match.index);
@@ -248,14 +250,20 @@ class PugUrlDefinitionProvider {
             });
         });
     }
-    _findLocationsWithTagName(tag, originSelectionRange, token) {
+    _findLocationsWithSelector(tag, originSelectionRange, token) {
         if (tag === null || tag === undefined) {
-            return Promise.resolve(null);
+            return Promise.resolve({
+                selector: tag,
+                links: null
+            });
         }
         return new Promise(resolve => {
             this._findLocationWithTagNameCached(tag, originSelectionRange, token)
                 .then(results => {
-                resolve(results);
+                resolve({
+                    selector: tag,
+                    links: results
+                });
             })
                 .catch(() => {
                 vscode.workspace.findFiles("**/*.{component,directive}.ts", "node_modules/*")
@@ -291,22 +299,82 @@ class PugUrlDefinitionProvider {
                             this._tagClearCacheTimeout[tag] = setTimeout(() => {
                                 delete this._tagUriCache[tag];
                                 delete this._tagClearCacheTimeout[tag];
-                            }, 60 * 1000); // cache for 1 minute
+                            }, 10 * 60 * 1000); // cache for 10 minutes
                         }
-                        resolve(result);
+                        resolve({
+                            selector: tag,
+                            links: result
+                        });
                     }).catch(errors => {
                         if (errors !== null && errors !== undefined) {
                             console.error(errors);
                         }
-                        resolve(null);
+                        resolve({
+                            selector: tag,
+                            links: result
+                        });
                     });
                 });
             });
         });
     }
+    _findAttributeWithSelector(uri, attribute, originSelectionRange, token) {
+        if (attribute === null || attribute === undefined || token.isCancellationRequested) {
+            return Promise.resolve({
+                uri: uri,
+                location: null
+            });
+        }
+        return new Promise(resolve => {
+            vscode.workspace.openTextDocument(uri)
+                .then(document => {
+                const selectorName = attribute.replace(/(\[|\(|\]|\))/g, '');
+                const attributrSelectorRegex = new RegExp(`@(Input|Output|Optional)\\((?:(['"])${selectorName}\\2)\\)(?:\\s+)([\\w]+)`, "gi");
+                const attributrNameRegex = new RegExp(`@(Input|Output|Optional)\\((?:\\s+)?\\)(?:\\s+)${selectorName}`, "gi");
+                const selectorMatch = attributrSelectorRegex.exec(document.getText());
+                const nameMatch = attributrNameRegex.exec(document.getText());
+                if (selectorMatch) {
+                    const startPosition = document.positionAt(selectorMatch.index + selectorMatch[0].length - (selectorMatch[3] ? selectorMatch[3].length : 1));
+                    const endPosition = document.positionAt(selectorMatch.index + selectorMatch[0].length);
+                    const link = {
+                        originSelectionRange: originSelectionRange,
+                        targetUri: vscode.Uri.file(document.fileName),
+                        targetRange: new vscode.Range(startPosition, endPosition),
+                        targetSelectionRange: new vscode.Range(startPosition, new vscode.Position(startPosition.line, document.lineAt(startPosition.line).text.length))
+                    };
+                    resolve({
+                        uri: uri,
+                        location: link
+                    });
+                }
+                else if (nameMatch) {
+                    const startPosition = document.positionAt(nameMatch.index + nameMatch[0].length - selectorName.length);
+                    const endPosition = document.positionAt(nameMatch.index + nameMatch[0].length);
+                    const link = {
+                        originSelectionRange: originSelectionRange,
+                        targetUri: vscode.Uri.file(document.fileName),
+                        targetRange: new vscode.Range(startPosition, endPosition),
+                        targetSelectionRange: new vscode.Range(startPosition, new vscode.Position(startPosition.line, document.lineAt(startPosition.line).text.length))
+                    };
+                    resolve({
+                        uri: uri,
+                        location: link
+                    });
+                }
+                else {
+                    resolve({ uri: uri, location: null });
+                }
+            }, () => {
+                resolve({
+                    uri: uri,
+                    location: null
+                });
+            });
+        });
+    }
     _checkNgSelectorUri(document, position, token) {
-        const tagSelectorRegex = new RegExp(this._tagSelectorRegex, "gm");
-        const wordRange = document.getWordRangeAtPosition(position, tagSelectorRegex);
+        const tagNameRegex = /^(?:\s+)?([a-zA-Z0-9_$-]+)((?:\.[a-zA-Z_-]+)+)?(?:\(|\s|$)[^,\)]*/;
+        const wordRange = document.getWordRangeAtPosition(position, tagNameRegex);
         let result = null;
         if (wordRange !== null && wordRange !== undefined) {
             const line = document.lineAt(wordRange.start);
@@ -314,22 +382,167 @@ class PugUrlDefinitionProvider {
             if (tagMatch) {
                 const tagName = tagMatch[1];
                 const originSelectionRange = new vscode.Range(new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex), new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex + (tagName && tagName.length || 0)));
-                result = this._findLocationsWithTagName(tagName, originSelectionRange, token);
+                result = this._findLocationsWithSelector(tagName, originSelectionRange, token)
+                    .then(result => result.links);
             }
         }
         return result;
     }
+    _findSelectorName(document, position) {
+        let result = {
+            tag: null,
+            attribute: null
+        };
+        const tagNameRegex = new RegExp(this._tagNameRegex, "gm");
+        const attributeSelectorRegex = new RegExp(this._attributeSelectorRegex, "g");
+        const isEndOfDeclaration = (line) => {
+            let result = false;
+            let openedCount = 0;
+            tagNameRegex.lastIndex = 0;
+            if (tagNameRegex.test(line)) {
+                tagNameRegex.lastIndex = 0;
+                result = true;
+            }
+            else {
+                for (let i = 0, l = line.length; i < l; ++i) {
+                    if (line[i] === ')') {
+                        if (--openedCount < 0) {
+                            result = true;
+                            break;
+                        }
+                    }
+                    else if (line[i] === '(') {
+                        ++openedCount;
+                    }
+                }
+            }
+            return result;
+        };
+        const isBeginningOfDeclaration = (line) => {
+            return /^(?:\s+)?[.#a-zA-Z_-]+\(/.test(line);
+        };
+        let searchText = document.lineAt(position.line).text;
+        let upLine = position.line;
+        let downLine = position.line;
+        let tagMatch = tagNameRegex.exec(searchText);
+        let attributeMatch = attributeSelectorRegex.exec(searchText);
+        let foundTag = tagMatch && tagMatch[1] || null;
+        let foundAttribute = attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
+        let range = new vscode.Range(new vscode.Position(upLine, 0), new vscode.Position(downLine, 0));
+        let wentToEnd = false;
+        let wentToBeginning = false;
+        let count = 0;
+        while (foundAttribute === null && downLine < document.lineCount - 1 && !wentToEnd) {
+            tagNameRegex.lastIndex = 0;
+            attributeSelectorRegex.lastIndex = 0;
+            range = new vscode.Range(new vscode.Position(upLine, 0), new vscode.Position(downLine, document.lineAt(Math.min(downLine, document.lineCount)).text.length));
+            searchText = document.getText(document.validateRange(range));
+            tagMatch = tagNameRegex.exec(searchText);
+            attributeMatch = attributeSelectorRegex.exec(searchText);
+            foundTag = foundTag || tagMatch && tagMatch[1] || null;
+            foundAttribute = foundAttribute || attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
+            if (isEndOfDeclaration(document.lineAt(downLine).text)) {
+                wentToEnd = true;
+            }
+            else {
+                downLine++;
+            }
+            if (++count > 100) {
+                break;
+            }
+        }
+        while (foundTag === null && upLine > 0 && !wentToBeginning) {
+            tagNameRegex.lastIndex = 0;
+            attributeSelectorRegex.lastIndex = 0;
+            range = new vscode.Range(new vscode.Position(upLine, 0), new vscode.Position(downLine, document.lineAt(Math.min(downLine, document.lineCount)).text.length));
+            searchText = document.getText(document.validateRange(range));
+            tagMatch = tagNameRegex.exec(searchText);
+            attributeMatch = attributeSelectorRegex.exec(searchText);
+            foundTag = foundTag || tagMatch && tagMatch[1] || null;
+            foundAttribute = foundAttribute || attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
+            if (isBeginningOfDeclaration(document.lineAt(upLine).text)) {
+                wentToBeginning = true;
+            }
+            else {
+                upLine--;
+            }
+            if (++count > 100) {
+                break;
+            }
+        }
+        result = {
+            tag: foundTag,
+            attribute: foundAttribute
+        };
+        return result;
+    }
     _checkTagAttributeSelectorUri(document, position, token) {
-        const tagSelectorRegex = new RegExp(this._tagSelectorRegex, "gm");
-        const wordRange = document.getWordRangeAtPosition(position, tagSelectorRegex);
+        const attributeSelectorRegex = /\[[$a-zA-Z0-9_]+\]|\[\([$a-zA-Z0-9_]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_]+/;
+        const wordRange = document.getWordRangeAtPosition(position, attributeSelectorRegex);
         let result = null;
+        const attributeName = document.getText(wordRange);
         if (wordRange !== null && wordRange !== undefined) {
             const line = document.lineAt(wordRange.start);
-            let tagMatch = /^(?:(?!include|\.)(?:\s+)?([a-zA-Z0-9_-]+))/.exec(line.text);
-            if (tagMatch) {
-                const tagName = tagMatch[1];
-                const originSelectionRange = new vscode.Range(new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex), new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex + (tagName && tagName.length || 0)));
-                result = this._findLocationsWithTagName(tagName, originSelectionRange, token);
+            const checkRegex = new RegExp(`${attributeName.replace(/(\[|\(|\]|\))/g, '\\$1')}(?:(?:\\s+)*=(?:\\s+)*(?:require\\()?((["'])[^\\n\\r,]+\\2\\)?)?|\\,|(?:\\s+)?\\))`, "g");
+            const match = checkRegex.exec(line.text);
+            if (match) {
+                if (match[1] === null || match[1] === undefined) {
+                    if (!attributeName.startsWith('[')) {
+                        result = this._findLocationsWithSelector(`[${attributeName}]`, wordRange, token)
+                            .then(result => result.links);
+                    }
+                    else {
+                        result = this._findLocationsWithSelector(attributeName, wordRange, token)
+                            .then(result => result.links);
+                    }
+                }
+                else {
+                    const selector = this._findSelectorName(document, position);
+                    let searchTasks = [];
+                    if (selector.tag) {
+                        searchTasks.push(this._findLocationsWithSelector(selector.tag, wordRange, token));
+                    }
+                    if (selector.attribute !== null && selector.attribute !== undefined) {
+                        if (!selector.attribute.startsWith('[')) {
+                            searchTasks.push(this._findLocationsWithSelector(`[${selector.attribute}]`, wordRange, token));
+                        }
+                        else {
+                            searchTasks.push(this._findLocationsWithSelector(selector.attribute, wordRange, token));
+                        }
+                    }
+                    result = new Promise(resolve => {
+                        Promise.all(searchTasks)
+                            .then(results => {
+                            let searchAttributeTasks = [];
+                            for (let taskResult of results) {
+                                if (taskResult.links) {
+                                    for (let location of taskResult.links) {
+                                        searchAttributeTasks.push(this._findAttributeWithSelector(location.targetUri, attributeName, wordRange, token));
+                                    }
+                                }
+                            }
+                            Promise.all(searchAttributeTasks)
+                                .then(attributeResults => {
+                                let locations = [];
+                                for (let result of attributeResults) {
+                                    if (result.location !== null && result.location !== undefined) {
+                                        locations.push(result.location);
+                                    }
+                                }
+                                if (locations.length > 0) {
+                                    resolve(locations);
+                                }
+                                else {
+                                    resolve(null);
+                                }
+                            }).catch(() => {
+                                resolve(null);
+                            });
+                        }).catch(() => {
+                            resolve(null);
+                        });
+                    });
+                }
             }
         }
         return result;
@@ -337,7 +550,8 @@ class PugUrlDefinitionProvider {
     provideDefinition(document, position, token) {
         return this._checkIncludesUri(document, position, token) ||
             this._checkMixinsUri(document, position, token) ||
-            this._checkNgSelectorUri(document, position, token);
+            this._checkNgSelectorUri(document, position, token) ||
+            this._checkTagAttributeSelectorUri(document, position, token);
     }
 }
 exports.PugUrlDefinitionProvider = PugUrlDefinitionProvider;
