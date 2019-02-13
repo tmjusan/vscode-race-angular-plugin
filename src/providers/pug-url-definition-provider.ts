@@ -15,6 +15,9 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
     private readonly _tagUriCache: {[tagName: string]: Array<vscode.Uri>} = {};
     private _tagClearCacheTimeout: {[tagName: string]: NodeJS.Timeout} = {};
     
+    private readonly _templateUrlCache: {[path: string]: Array<vscode.Uri>} = {};
+    private _templateUrlClearCacheTimeout: {[path: string]: NodeJS.Timeout} = {};
+
     private _checkIncludesUri(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
         const wordRange = document.getWordRangeAtPosition(position, /[\s+]?include[\s]+((?:(?:[^<>:;,?"*|\\\/\n\r]+)?[\\\/](?:[^<>:;,?"*|\\\/\n\r]+))+)/g);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null;
@@ -589,11 +592,231 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         return result;
     }
 
+    private _checkTemplateUrl(pugDocument: vscode.TextDocument, uri: vscode.Uri, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<CheckFileResult> {
+        if (token.isCancellationRequested) {
+            return Promise.resolve({
+                uri: uri,
+                location: null
+            });
+        }
+        return new Promise<CheckFileResult>(resolve => {
+            vscode.workspace.openTextDocument(uri)
+                .then(document => {
+                    const documentText = document.getText();
+                    const templateUrlRegex = /templateUrl(?:\s+)?:(?:\s+)?(['"])([\/\w,.\s-]+)\1/g;
+                    const match = templateUrlRegex.exec(documentText);
+                    if (match && match[2]) {
+                        getFullPathOrNull(document, match[2])
+                            .then(fullTemplateUrlPath => {
+                                if (fullTemplateUrlPath !== null && fullTemplateUrlPath !== undefined) {
+                                    if (fullTemplateUrlPath === pugDocument.fileName) {
+                                        resolve({
+                                            uri: uri,
+                                            location: {
+                                                originSelectionRange: originSelectionRange,
+                                                targetUri: document.uri,
+                                                targetSelectionRange: new vscode.Range(
+                                                    document.positionAt(match.index - match[2].length - 1),
+                                                    document.positionAt(match.index - 1)
+                                                ),
+                                                targetRange: new vscode.Range(
+                                                    document.positionAt(match.index - match[2].length - 1),
+                                                    document.positionAt(match.index - 1)
+                                                )
+                                            }
+                                        });
+                                    } else {
+                                        resolve({
+                                            uri: uri,
+                                            location: null
+                                        });
+                                    }
+                                } else {
+                                    resolve({
+                                        uri: uri,
+                                        location: null
+                                    });
+                                }
+                            }).catch(() => {
+                                resolve({
+                                    uri: uri,
+                                    location: null
+                                });
+                            });
+                    } else {
+                        resolve({
+                            uri: uri,
+                            location: null
+                        });
+                    }
+                }, () => {
+                    resolve({
+                        uri: uri,
+                        location: null
+                    });
+                });           
+        });
+    }
+
+    private _findLocationWithTemplateUrlCached(pugDocument: vscode.TextDocument, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> {
+        if (this._templateUrlCache[pugDocument.fileName] === null || this._templateUrlCache[pugDocument.fileName] === undefined) {
+            return Promise.reject(null);
+        }
+        return new Promise<Array<vscode.LocationLink> | null>((resolve, reject) => {
+            let result: Array<vscode.LocationLink> = [];
+            let checkTasks: Array<Promise<CheckFileResult>> = [];
+            for (let uri of this._templateUrlCache[pugDocument.fileName]) {
+                checkTasks.push(
+                    this._checkTemplateUrl(pugDocument, uri, originSelectionRange, token)
+                );
+            }
+            Promise.all(checkTasks)
+                .then(results => {
+                    for (let checkResult of results) {
+                        if (checkResult.location !== null && checkResult.location !== undefined) {
+                            // Filter similar results
+                            const findResult = result.find(loc => {
+                                return checkResult.location !== null && checkResult.location !== undefined &&
+                                    loc !== null && loc !== undefined && 
+                                    loc.targetUri.path === checkResult.location.targetUri.path;
+                            });
+                            if (findResult === null || findResult === undefined) {
+                                result.push(checkResult.location);
+                            }
+                        }
+                    }
+                    if (result.length > 0) {
+                        resolve(result);
+                    } else {
+                        reject(null);
+                    }
+                }).catch(error => {
+                    reject(error);
+                });
+        });
+    }
+
+    private _findLocationsWithTemplateUrl(pugDocument: vscode.TextDocument, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<FindLocationResult>  {
+        return new Promise<FindLocationResult>(resolve => {
+            this._findLocationWithTemplateUrlCached(pugDocument, originSelectionRange, token)
+                .then(results => {
+                    resolve({
+                        selector: pugDocument.fileName, 
+                        links: results
+                    });
+                })
+                .catch(() => {
+                    vscode.workspace.findFiles("**/*.component.ts", "node_modules/*")
+                        .then(sourceFiles => {
+                            let result: Array<vscode.LocationLink> = [];
+                            let checkTasks: Array<Promise<CheckFileResult>> = [];
+                            for (let file of sourceFiles) {
+                                checkTasks.push(
+                                    this._checkTemplateUrl(pugDocument, file, originSelectionRange, token)
+                                );
+                            }
+                            Promise.all(checkTasks)
+                                .then(results => {
+                                    for (let checkResult of results) {
+                                        if (checkResult.location !== null && checkResult.location !== undefined) {
+                                            if (this._templateUrlCache[pugDocument.fileName] === null || this._templateUrlCache[pugDocument.fileName] === undefined) {
+                                                this._templateUrlCache[pugDocument.fileName] = [];
+                                            }
+                                            this._templateUrlCache[pugDocument.fileName].push(checkResult.uri);
+                                            // Filter similar results
+                                            const findResult = result.find(loc => {
+                                                return checkResult.location !== null && checkResult.location !== undefined &&
+                                                    loc !== null && loc !== undefined && 
+                                                    loc.targetUri.path === checkResult.location.targetUri.path;
+                                            });
+                                            if (findResult === null || findResult === undefined) {
+                                                result.push(checkResult.location);
+                                            }
+                                        }
+                                    }
+                                    if (this._templateUrlCache[pugDocument.fileName] !== null && this._templateUrlCache[pugDocument.fileName] !== undefined) {
+                                        if (this._templateUrlClearCacheTimeout[pugDocument.fileName] !== null && this._templateUrlClearCacheTimeout[pugDocument.fileName] !== undefined) {
+                                            clearTimeout(this._templateUrlClearCacheTimeout[pugDocument.fileName]);
+                                        }
+                                        this._templateUrlClearCacheTimeout[pugDocument.fileName] = setTimeout(() => {
+                                            delete this._templateUrlCache[pugDocument.fileName];
+                                            delete this._templateUrlClearCacheTimeout[pugDocument.fileName];
+                                        }, 10 * 60 * 1000); // cache for 10 minutes
+                                    }
+                                    resolve({
+                                        selector: pugDocument.fileName, 
+                                        links: result
+                                    });
+                                }).catch(errors => {
+                                    if (errors !== null && errors !== undefined) {
+                                        console.error(errors);
+                                    }
+                                    resolve({
+                                        selector: pugDocument.fileName, 
+                                        links: result
+                                    });
+                                });
+                        });
+                });
+        });
+    }
+
+    private _adjustPropertyPosition(propertyName: string, link: vscode.LocationLink): Promise<vscode.LocationLink> {
+        return new Promise<vscode.LocationLink>(resolve => {
+            vscode.workspace.openTextDocument(link.targetUri)
+                .then(document => {
+                    const functionRegex = new RegExp(`^((?:\\s+)?(?:public|private|protected|))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
+                    const match = functionRegex.exec(document.getText());
+                    if (match) {
+                        link.targetRange = new vscode.Range(
+                            document.positionAt(match.index + (match[1] ? match[1].length: 0)),
+                            document.positionAt(match.index + (match[1] ? match[1].length: 0) + propertyName.length)
+                        );
+                        link.targetSelectionRange = new vscode.Range(
+                            document.positionAt(match.index + (match[1] ? match[1].length: 0)),
+                            document.positionAt(match.index + (match[1] ? match[1].length: 0) + propertyName.length)
+                        );
+                    }
+                    resolve(link);
+                }, () => {
+                    resolve(link);
+                });
+        });
+    }
+
+    private _checkFunctionDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
+        const functionRegex = /([\w$]+)(?:\s+)?\(([^\r\n=]*?|[[(][^\r\n=]*[}\]])\)/;
+        const wordRange = document.getWordRangeAtPosition(position, functionRegex);
+        let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
+
+        if (wordRange !== null && wordRange !== undefined) {
+            const match = functionRegex.exec(document.getText(wordRange));
+            if (match) {
+                const propertyName = match[1];
+                const originSelectionRange: vscode.Range = new vscode.Range(
+                    new vscode.Position(wordRange.start.line, wordRange.start.character),
+                    new vscode.Position(wordRange.start.line, wordRange.end.character - match[0].length + match[1].length)
+                );
+                result = this._findLocationsWithTemplateUrl(document, originSelectionRange, token)
+                    .then(result => {
+                        const adjustTasks: Array<Promise<vscode.LocationLink>> = [];
+                        for (let link of result.links || []) {
+                            adjustTasks.push(this._adjustPropertyPosition(propertyName, link))
+                        }
+                        return Promise.all(adjustTasks);
+                    });
+            }
+        }
+
+        return result;
+    }
+
     provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.LocationLink[]> {
         return this._checkIncludesUri(document, position, token) || 
             this._checkMixinsUri(document, position, token) ||
             this._checkNgSelectorUri(document, position, token) ||
-            this._checkTagAttributeSelectorUri(document, position, token);
+            this._checkTagAttributeSelectorUri(document, position, token) ||
+            this._checkFunctionDefinition(document, position, token);
     }
 
 }
