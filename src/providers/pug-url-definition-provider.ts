@@ -765,7 +765,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         return new Promise<vscode.LocationLink>(resolve => {
             vscode.workspace.openTextDocument(link.targetUri)
                 .then(document => {
-                    const functionRegex = new RegExp(`^((?:\\s+)?(?:public|private|protected|))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
+                    const functionRegex = new RegExp(`^((?:\\s+)?(?:public|private|protected|))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
                     const match = functionRegex.exec(document.getText());
                     if (match) {
                         link.targetRange = new vscode.Range(
@@ -801,7 +801,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                     .then(result => {
                         const adjustTasks: Array<Promise<vscode.LocationLink>> = [];
                         for (let link of result.links || []) {
-                            adjustTasks.push(this._adjustPropertyPosition(propertyName, link))
+                            adjustTasks.push(this._adjustPropertyPosition(propertyName, link));
                         }
                         return Promise.all(adjustTasks);
                     });
