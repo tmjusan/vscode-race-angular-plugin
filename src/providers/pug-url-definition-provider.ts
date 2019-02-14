@@ -787,7 +787,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
     }
 
     private _checkFunctionDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
-        const functionRegex = /([\w$]+)?\(([^\r\n=]*?|[[(][^\r\n=]*[}\]])\)/;
+        const functionRegex = /([\w$]+)\(([^\r\n=]*?|[[(][^\r\n=]*[}\]])\)/;
         const wordRange = document.getWordRangeAtPosition(position, functionRegex);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
 
@@ -862,19 +862,29 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         return new Promise<vscode.LocationLink | null>(resolve => {
             vscode.workspace.openTextDocument(link.targetUri)
                 .then(document => {
+                    const documentText: string = document.getText(new vscode.Range(
+                        link.targetRange.start,
+                        document.positionAt(document.getText().length)
+                    ));
+                    const skippedLength = document.getText(
+                        new vscode.Range(
+                            document.positionAt(0),
+                            link.targetRange.start
+                        )
+                    ).length;
                     const constructorRegex = new RegExp(`(constructor(?:[\\s\\S]+)?(?:private|public|protected)\\s+)${propertyName}(?:\\s+)?:?`, 'm');
-                    const getterRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?get(?:\\s+))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
-                    const anyRegex = new RegExp(`${propertyName}(?!\\.|(?:\\s+)?=(?:\\s+))`, 'm');
-                    const match = constructorRegex.exec(document.getText()) || getterRegex.exec(document.getText()) || anyRegex.exec(document.getText());
+                    const getterRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?(?:get|set)(?:\\s+))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
+                    const anyRegex = new RegExp(`(?:[^\\w-])${propertyName}(?!\\.|(?:\\s+)?=(?:\\s+)?|\w):?`);
+                    const match = constructorRegex.exec(documentText) || getterRegex.exec(documentText) || anyRegex.exec(documentText);
 
                     if (match) {
                         link.targetRange = new vscode.Range(
-                            document.positionAt(match.index + (match[1] ? match[1].length: 0)),
-                            document.positionAt(match.index + (match[1] ? match[1].length: 0) + propertyName.length)
+                            document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length: 0)),
+                            document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length: 0) + propertyName.length)
                         );
                         link.targetSelectionRange = new vscode.Range(
-                            document.positionAt(match.index + (match[1] ? match[1].length: 0)),
-                            document.positionAt(match.index + (match[1] ? match[1].length: 0) + propertyName.length)
+                            document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length: 0)),
+                            document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length: 0) + propertyName.length)
                         );
                         resolve(link);
                     } else {
@@ -887,12 +897,13 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
     }
 
     private _checkPropertyDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
-        const excludeRegex = /[^\s-+=.'"()[\]{}]+/;
+        const excludeRegex = /[^\s-+=.'"()[\]{}!]+/;
         const wordRange = document.getWordRangeAtPosition(position, excludeRegex);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
-        
+
         if (wordRange !== null && wordRange !== undefined) {
             const lineText = document.lineAt(wordRange.start).text;
+            console.log('checking property:', document.getText(wordRange));
             try {
                 if (this._isProperty(lineText, wordRange.start.character, wordRange.end.character)) {
                     result = this._findLocationsWithTemplateUrl(document, wordRange, token)
