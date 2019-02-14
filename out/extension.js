@@ -9,17 +9,12 @@ function activate(context) {
         pattern: '**/*.ts',
         scheme: 'file',
     }, new file_url_definition_provider_ts_1.FileUrlDefinitionProvider());
-    const urlJadeRegistration = vscode.languages.registerDefinitionProvider({
-        language: 'jade',
-        pattern: '**/*.jade',
-        scheme: 'file',
-    }, new pug_url_definition_provider_1.PugUrlDefinitionProvider());
     const urlPugRegistration = vscode.languages.registerDefinitionProvider({
-        language: 'pug',
-        pattern: '**/*.pug',
+        language: 'jade',
+        pattern: '**/*.{jade,pug}',
         scheme: 'file',
     }, new pug_url_definition_provider_1.PugUrlDefinitionProvider());
-    context.subscriptions.push(urlRegistration, urlPugRegistration, urlJadeRegistration);
+    context.subscriptions.push(urlRegistration, urlPugRegistration);
 }
 exports.activate = activate;
 // this method is called when your extension is deactivated
