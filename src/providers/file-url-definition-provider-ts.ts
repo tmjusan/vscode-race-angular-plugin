@@ -9,7 +9,7 @@ export class FileUrlDefinitionProvider implements vscode.DefinitionProvider {
 
         if (wordRange !== null && wordRange !== undefined) {
             let relativeUri = document.getText(wordRange);
-            let match = /[^<>:;,?"*|]+/g.exec(relativeUri);
+            let match = /[^<>:;,?"'*|]+/g.exec(relativeUri);
             if (match !== null) {
                 relativeUri = match[0];
             } else {
