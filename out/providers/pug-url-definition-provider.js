@@ -713,7 +713,7 @@ class PugUrlDefinitionProvider {
         return new Promise(resolve => {
             vscode.workspace.openTextDocument(link.targetUri)
                 .then(document => {
-                const functionRegex = new RegExp(`^((?:\\s+)?(?:public|private|protected|))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
+                const functionRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+)))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
                 const match = functionRegex.exec(document.getText());
                 if (match) {
                     link.targetRange = new vscode.Range(document.positionAt(match.index + (match[1] ? match[1].length : 0)), document.positionAt(match.index + (match[1] ? match[1].length : 0) + propertyName.length));

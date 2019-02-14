@@ -140,6 +140,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
 
     private _checkMixinsUri(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
         const wordRange = document.getWordRangeAtPosition(position, /^(?:[\s]+)?\+([^()\+\s]+)/gm);
+
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null;
         if (wordRange !== null && wordRange !== undefined) {
             let mixinName = document.getText(wordRange);
@@ -410,6 +411,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         const tagNameRegex = /^(?:\s+)?([a-zA-Z0-9_$-]+)((?:\.[a-zA-Z_-]+)+)?(?:\(|\s|$)[^,\)]*/;
         const wordRange = document.getWordRangeAtPosition(position, tagNameRegex);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
+
         if (wordRange !== null && wordRange !== undefined) {
             const line = document.lineAt(wordRange.start);
             let tagMatch = /^(?:(?!include|\.)(?:\s+)?([a-zA-Z0-9_-]+))/.exec(line.text);
@@ -526,6 +528,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         const wordRange = document.getWordRangeAtPosition(position, attributeSelectorRegex);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
         const attributeName = document.getText(wordRange);
+
         if (wordRange !== null && wordRange !== undefined) {
             const line = document.lineAt(wordRange.start);
             const checkRegex = new RegExp(`${attributeName.replace(/(\[|\(|\]|\))/g, '\\$1')}(?:(?:\\s+)*=(?:\\s+)*(?:require\\()?((["'])(?:[^\\n\\r,]+|([\\[{])[^\\n\\r]+[\\]}])\\2\\)?)?|\\,|(?:\\s+)?\\))`, "g");
@@ -762,7 +765,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         return new Promise<vscode.LocationLink>(resolve => {
             vscode.workspace.openTextDocument(link.targetUri)
                 .then(document => {
-                    const functionRegex = new RegExp(`^((?:\\s+)?(?:public|private|protected|))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
+                    const functionRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+)))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
                     const match = functionRegex.exec(document.getText());
                     if (match) {
                         link.targetRange = new vscode.Range(
@@ -785,6 +788,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         const functionRegex = /([\w$]+)(?:\s+)?\(([^\r\n=]*?|[[(][^\r\n=]*[}\]])\)/;
         const wordRange = document.getWordRangeAtPosition(position, functionRegex);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
+
         if (wordRange !== null && wordRange !== undefined) {
             const match = functionRegex.exec(document.getText(wordRange));
             if (match) {
