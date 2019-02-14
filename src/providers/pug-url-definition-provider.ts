@@ -5,6 +5,7 @@ import { CheckFileResult } from '../interfaces/check-file-result';
 import { clearTimeout } from 'timers';
 import { FindSelectorResult } from '../interfaces/find-selector-result';
 import { FindLocationResult } from '../interfaces/find-location-result';
+import { performance } from 'perf_hooks';
 
 export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
 
@@ -408,15 +409,16 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
     }
 
     private _checkNgSelectorUri(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
-        const tagNameRegex = /^(?:\s+)?([a-zA-Z0-9_$-]+)((?:\.[a-zA-Z_-]+)+)?(?:\(|\s|$)[^,\)]*/;
+        const tagNameRegex = /^(?:\s+)?([a-zA-Z0-9_$-]+)((?:\.[a-zA-Z_0-9-]+)+)?(?:\(|\s|$)[^,\)]*/;
         const wordRange = document.getWordRangeAtPosition(position, tagNameRegex);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
-
         if (wordRange !== null && wordRange !== undefined) {
             const line = document.lineAt(wordRange.start);
-            let tagMatch = /^(?:(?!include|\.)(?:\s+)?([a-zA-Z0-9_-]+))/.exec(line.text);
-            if (tagMatch) {
-                const tagName = tagMatch[1];
+            let tagMatch = /^(?:((?!include|\.)(?:\s+))?([a-zA-Z0-9_-]+))/.exec(line.text);
+            const tagNameStart = tagMatch && tagMatch[1] && tagMatch[1].length || 0;
+            const tagNameEnd = tagNameStart + (tagMatch && tagMatch[2] && tagMatch[2].length || 0);
+            if (tagMatch && position.character >= tagNameStart && position.character <= tagNameEnd ) {
+                const tagName = tagMatch[2];
                 const originSelectionRange: vscode.Range = new vscode.Range(
                     new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex),
                     new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex + (tagName && tagName.length || 0))
@@ -761,7 +763,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         });
     }
 
-    private _adjustPropertyPosition(propertyName: string, link: vscode.LocationLink): Promise<vscode.LocationLink> {
+    private _adjustMethodPosition(propertyName: string, link: vscode.LocationLink): Promise<vscode.LocationLink> {
         return new Promise<vscode.LocationLink>(resolve => {
             vscode.workspace.openTextDocument(link.targetUri)
                 .then(document => {
@@ -785,26 +787,125 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
     }
 
     private _checkFunctionDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
-        const functionRegex = /([\w$]+)(?:\s+)?\(([^\r\n=]*?|[[(][^\r\n=]*[}\]])\)/;
+        const functionRegex = /([\w$]+)?\(([^\r\n=]*?|[[(][^\r\n=]*[}\]])\)/;
         const wordRange = document.getWordRangeAtPosition(position, functionRegex);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
 
         if (wordRange !== null && wordRange !== undefined) {
             const match = functionRegex.exec(document.getText(wordRange));
+            const line = document.lineAt(position);
             if (match) {
-                const propertyName = match[1];
-                const originSelectionRange: vscode.Range = new vscode.Range(
-                    new vscode.Position(wordRange.start.line, wordRange.start.character),
-                    new vscode.Position(wordRange.start.line, wordRange.end.character - match[0].length + match[1].length)
-                );
-                result = this._findLocationsWithTemplateUrl(document, originSelectionRange, token)
-                    .then(result => {
-                        const adjustTasks: Array<Promise<vscode.LocationLink>> = [];
-                        for (let link of result.links || []) {
-                            adjustTasks.push(this._adjustPropertyPosition(propertyName, link));
-                        }
-                        return Promise.all(adjustTasks);
-                    });
+                if (wordRange.start.character === 0 || wordRange.start.character > 0 && 
+                    !/[\.?\])+-=]/.test(line.text[wordRange.start.character - 1])) {
+                    const propertyName = match[1];
+                    const originSelectionRange: vscode.Range = new vscode.Range(
+                        new vscode.Position(wordRange.start.line, wordRange.start.character),
+                        new vscode.Position(wordRange.start.line, wordRange.end.character - match[0].length + match[1].length)
+                    );
+                    result = this._findLocationsWithTemplateUrl(document, originSelectionRange, token)
+                        .then(result => {
+                            const adjustTasks: Array<Promise<vscode.LocationLink>> = [];
+                            for (let link of result.links || []) {
+                                adjustTasks.push(this._adjustMethodPosition(propertyName, link));
+                            }
+                            return Promise.all(adjustTasks);
+                        });
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private _isProperty(lineText: string, start: number, end: number): boolean {
+        let result: boolean = true;
+        const lineTextLength: number = lineText.length;
+        const spaceRegex = /\s/;
+        const excludeRegex = /[.\-#\/}\w]/;
+
+        let hadDoubleCurlyLeft: boolean = false;
+        let hadDoubleCurlyRight: boolean = false;
+        const hadDoubleCurly = () => hadDoubleCurlyLeft && hadDoubleCurlyRight;
+        let firstNonSpaceBefore: string | null = null;
+        let firstNonSpaceAfter: string | null = null;
+
+        while (start > 1 || end < lineTextLength - 2) {
+            start = Math.max(1, --start);
+            if (lineText[start] === '{' && lineText[start - 1] === '{') {
+                hadDoubleCurlyLeft = true;
+            }
+            if (lineText[end] === '}' && lineText[end + 1] === '}') {
+                hadDoubleCurlyRight = true;
+            }
+            if (firstNonSpaceBefore === null && !spaceRegex.test(lineText[start])) {
+                firstNonSpaceBefore = lineText[start];
+                if (excludeRegex.test(firstNonSpaceBefore)) {
+                    result = false;
+                    break;
+                }
+            }
+            if (firstNonSpaceAfter === null && !spaceRegex.test(lineText[end])) {
+                firstNonSpaceAfter = lineText[end];
+            }
+            end = Math.min(lineTextLength - 2, ++end);
+        }
+
+        if (hadDoubleCurly() && result) {
+            result = !(firstNonSpaceBefore === "\"" && firstNonSpaceAfter === "\"") && 
+                !(firstNonSpaceBefore === "\'" && firstNonSpaceAfter === "\'");
+        }
+
+        return result;
+    }
+
+    private _checkPropertyPosition(propertyName: string, link: vscode.LocationLink): Promise<vscode.LocationLink | null> {
+        return new Promise<vscode.LocationLink | null>(resolve => {
+            vscode.workspace.openTextDocument(link.targetUri)
+                .then(document => {
+                    const constructorRegex = new RegExp(`(constructor(?:[\\s\\S]+)?(?:private|public|protected)\\s+)${propertyName}(?:\\s+)?:?`, 'm');
+                    const getterRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?get(?:\\s+))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
+                    const anyRegex = new RegExp(`${propertyName}(?!\\.|(?:\\s+)?=(?:\\s+))`, 'm');
+                    const match = constructorRegex.exec(document.getText()) || getterRegex.exec(document.getText()) || anyRegex.exec(document.getText());
+
+                    if (match) {
+                        link.targetRange = new vscode.Range(
+                            document.positionAt(match.index + (match[1] ? match[1].length: 0)),
+                            document.positionAt(match.index + (match[1] ? match[1].length: 0) + propertyName.length)
+                        );
+                        link.targetSelectionRange = new vscode.Range(
+                            document.positionAt(match.index + (match[1] ? match[1].length: 0)),
+                            document.positionAt(match.index + (match[1] ? match[1].length: 0) + propertyName.length)
+                        );
+                        resolve(link);
+                    } else {
+                        resolve(null);
+                    }
+                }, () => {
+                    resolve(link);
+                });
+        });
+    }
+
+    private _checkPropertyDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
+        const excludeRegex = /[^\s-+=.'"()[\]{}]+/;
+        const wordRange = document.getWordRangeAtPosition(position, excludeRegex);
+        let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
+        
+        if (wordRange !== null && wordRange !== undefined) {
+            const lineText = document.lineAt(wordRange.start).text;
+            try {
+                if (this._isProperty(lineText, wordRange.start.character, wordRange.end.character)) {
+                    result = this._findLocationsWithTemplateUrl(document, wordRange, token)
+                        .then(result => {
+                            const adjustTasks: Array<Promise<vscode.LocationLink | null>> = [];
+                            for (let link of result.links || []) {
+                                adjustTasks.push(this._checkPropertyPosition(document.getText(wordRange), link));
+                            }
+                            return Promise.all(<Array<Promise<vscode.LocationLink>>>adjustTasks.filter(link => link !== null && link !== undefined));
+                        });
+                }
+            } catch (e) {
+                console.error(e);
             }
         }
 
@@ -816,7 +917,8 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
             this._checkMixinsUri(document, position, token) ||
             this._checkNgSelectorUri(document, position, token) ||
             this._checkTagAttributeSelectorUri(document, position, token) ||
-            this._checkFunctionDefinition(document, position, token);
+            this._checkFunctionDefinition(document, position, token) ||
+            this._checkPropertyDefinition(document, position, token);
     }
 
 }
