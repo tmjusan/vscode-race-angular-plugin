@@ -4,7 +4,7 @@ import { getFileLocationOrNull } from '../utils/get-file-location-or-null';
 export class FileUrlDefinitionProvider implements vscode.DefinitionProvider {
 
     provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.LocationLink[]> {
-        const wordRange = document.getWordRangeAtPosition(position, /(['"])((?:[^<>:;,?"*|\\\/]+)?[\\\/](?:[^<>:;,?"*|\\\/]+))+\1/g);
+        const wordRange = document.getWordRangeAtPosition(position, /(['"])((?:[^<>:;,?"'*|\\\/]+)?[\\\/](?:[^<>:;,?"'*|\\\/]+))+\1/g);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null;
 
         if (wordRange !== null && wordRange !== undefined) {

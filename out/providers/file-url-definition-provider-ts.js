@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const get_file_location_or_null_1 = require("../utils/get-file-location-or-null");
 class FileUrlDefinitionProvider {
     provideDefinition(document, position, token) {
-        const wordRange = document.getWordRangeAtPosition(position, /(['"])((?:[^<>:;,?"*|\\\/]+)?[\\\/](?:[^<>:;,?"*|\\\/]+))+\1/g);
+        const wordRange = document.getWordRangeAtPosition(position, /(['"])((?:[^<>:;,?"'*|\\\/]+)?[\\\/](?:[^<>:;,?"'*|\\\/]+))+\1/g);
         let result;
         if (wordRange !== null && wordRange !== undefined) {
             let relativeUri = document.getText(wordRange);
