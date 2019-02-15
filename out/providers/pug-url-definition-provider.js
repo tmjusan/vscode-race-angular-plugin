@@ -78,7 +78,7 @@ class PugUrlDefinitionProvider {
                             endCharacterNumber = pugFileDocument.lineAt(--endLineNumber).text.length;
                         }
                     }
-                    const endPosition = new vscode.Position(endLineNumber, endCharacterNumber);
+                    const endPosition = new vscode.Position(endLineNumber, Math.max(endCharacterNumber, 0));
                     const link = {
                         originSelectionRange: originSelectionRange,
                         targetUri: vscode.Uri.file(filePath),
@@ -91,6 +91,9 @@ class PugUrlDefinitionProvider {
                     resolve(null);
                 }
             }, errors => {
+                if (errors) {
+                    console.error(errors);
+                }
                 resolve(null);
             });
         });
@@ -173,6 +176,9 @@ class PugUrlDefinitionProvider {
                         }
                         resolve(null);
                     });
+                }).catch(e => {
+                    console.error(e);
+                    return e;
                 });
             }
             else {
@@ -332,7 +338,7 @@ class PugUrlDefinitionProvider {
                 .then(document => {
                 const selectorName = attribute.replace(/(\[|\(|\]|\))/g, '');
                 const attributrSelectorRegex = new RegExp(`@(Input|Output|Optional)\\((?:(['"])${selectorName}\\2)\\)(?:\\s+)([\\w]+)`, "gi");
-                const attributrNameRegex = new RegExp(`@(Input|Output|Optional)\\((?:\\s+)?\\)(?:\\s+)${selectorName}`, "gi");
+                const attributrNameRegex = new RegExp(`@(Input|Output|Optional)\\((?:\\s+)?\\)\\s*(?:set|get)?\\s*${selectorName}`, "gi");
                 const selectorMatch = attributrSelectorRegex.exec(document.getText());
                 const nameMatch = attributrNameRegex.exec(document.getText());
                 if (selectorMatch) {
@@ -481,13 +487,13 @@ class PugUrlDefinitionProvider {
         return result;
     }
     _checkTagAttributeSelectorUri(document, position, token) {
-        const attributeSelectorRegex = /\[[$a-zA-Z0-9_-]+\]|\[\([$a-zA-Z0-9_-]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_-]+/;
+        const attributeSelectorRegex = /\[[$a-zA-Z0-9_]+\]|\[\([$a-zA-Z0-9_]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_]+/;
         const wordRange = document.getWordRangeAtPosition(position, attributeSelectorRegex);
         let result = null;
         const attributeName = document.getText(wordRange);
         if (wordRange !== null && wordRange !== undefined) {
             const line = document.lineAt(wordRange.start);
-            const checkRegex = new RegExp(`${attributeName.replace(/(\[|\(|\]|\))/g, '\\$1')}(?:(?:\\s+)*=[^=](?:\\s+)*(?:require\\()?((["'])(?:[^\\n\\r,]+|([\\[{])[^\\n\\r]+[\\]}])\\2\\)?)?|\\,|(?:\\s+)?\\))`, "g");
+            const checkRegex = new RegExp(`${attributeName.replace(/(\[|\(|\]|\))/g, '\\$1')}(?:\\s*=\\s*(?:require\\s*\\()?((["'])(?:[^\\n\\r]*|([\\[{])[^\\n\\r]+[\\]}])\\2))?(?:,|\\s*\\))(?!"|')`);
             const match = checkRegex.exec(line.text);
             if (match) {
                 if (match[1] === null || match[1] === undefined) {
@@ -739,14 +745,16 @@ class PugUrlDefinitionProvider {
                     !/[\.?\])+-=]/.test(line.text[wordRange.start.character - 1])) {
                     const propertyName = match[1];
                     const originSelectionRange = new vscode.Range(new vscode.Position(wordRange.start.line, wordRange.start.character), new vscode.Position(wordRange.start.line, wordRange.end.character - match[0].length + match[1].length));
-                    result = this._findLocationsWithTemplateUrl(document, originSelectionRange, token)
-                        .then(result => {
-                        const adjustTasks = [];
-                        for (let link of result.links || []) {
-                            adjustTasks.push(this._adjustMethodPosition(propertyName, link));
-                        }
-                        return Promise.all(adjustTasks);
-                    });
+                    if (originSelectionRange.start.character <= position.character && originSelectionRange.end.character >= position.character) {
+                        result = this._findLocationsWithTemplateUrl(document, originSelectionRange, token)
+                            .then(result => {
+                            const adjustTasks = [];
+                            for (let link of result.links || []) {
+                                adjustTasks.push(this._adjustMethodPosition(propertyName, link));
+                            }
+                            return Promise.all(adjustTasks);
+                        });
+                    }
                 }
             }
         }
@@ -756,13 +764,17 @@ class PugUrlDefinitionProvider {
         let result = true;
         const lineTextLength = lineText.length;
         const spaceRegex = /\s/;
+        const quotesRegex = /["']/;
         const excludeRegex = /[.\-#\/}\w]/;
         let hadDoubleCurlyLeft = false;
         let hadDoubleCurlyRight = false;
         const hadDoubleCurly = () => hadDoubleCurlyLeft && hadDoubleCurlyRight;
         let firstNonSpaceBefore = null;
         let firstNonSpaceAfter = null;
-        while (start > 1 || end < lineTextLength - 2) {
+        if (/\d/.test(lineText[start])) {
+            result = false;
+        }
+        while (result && (start > 1 || end < lineTextLength - 2)) {
             start = Math.max(1, --start);
             if (lineText[start] === '{' && lineText[start - 1] === '{') {
                 hadDoubleCurlyLeft = true;
@@ -780,6 +792,12 @@ class PugUrlDefinitionProvider {
             if (firstNonSpaceAfter === null && !spaceRegex.test(lineText[end])) {
                 firstNonSpaceAfter = lineText[end];
             }
+            if (firstNonSpaceBefore && firstNonSpaceAfter &&
+                quotesRegex.test(firstNonSpaceBefore) &&
+                excludeRegex.test(firstNonSpaceAfter)) {
+                result = true;
+                break;
+            }
             end = Math.min(lineTextLength - 2, ++end);
         }
         if (hadDoubleCurly() && result) {
@@ -788,7 +806,7 @@ class PugUrlDefinitionProvider {
         }
         return result;
     }
-    _checkPropertyPosition(propertyName, link) {
+    _checkPropertyPosition(propertyName, link, originSelectionRange) {
         return new Promise(resolve => {
             vscode.workspace.openTextDocument(link.targetUri)
                 .then(document => {
@@ -801,6 +819,9 @@ class PugUrlDefinitionProvider {
                 if (match) {
                     link.targetRange = new vscode.Range(document.positionAt(skippedLength + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0)), document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0) + propertyName.length));
                     link.targetSelectionRange = new vscode.Range(document.positionAt(skippedLength + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0)), document.positionAt(skippedLength + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0) + propertyName.length));
+                    if (originSelectionRange !== null && originSelectionRange !== undefined) {
+                        link.originSelectionRange = originSelectionRange;
+                    }
                     resolve(link);
                 }
                 else {
@@ -812,25 +833,36 @@ class PugUrlDefinitionProvider {
         });
     }
     _checkPropertyDefinition(document, position, token) {
-        const excludeRegex = /(?!\d|\W)[^\s-+=.'"()[\]{}!]+/;
-        const wordRange = document.getWordRangeAtPosition(position, excludeRegex);
+        const excludeRegex = /[^\s-+=.'"()[\]{}!]+/;
+        let wordRange = document.getWordRangeAtPosition(position, excludeRegex);
+        let cursorRange = null;
         let result = null;
         if (wordRange !== null && wordRange !== undefined) {
             const lineText = document.lineAt(wordRange.start).text;
-            try {
-                if (this._isProperty(lineText, wordRange.start.character, wordRange.end.character)) {
-                    result = this._findLocationsWithTemplateUrl(document, wordRange, token)
-                        .then(result => {
-                        const adjustTasks = [];
-                        for (let link of result.links || []) {
-                            adjustTasks.push(this._checkPropertyPosition(document.getText(wordRange), link));
-                        }
-                        return Promise.all(adjustTasks.filter(link => link !== null && link !== undefined));
-                    });
-                }
+            let isProperty = false;
+            const ngForCollectionRegex = new RegExp(`let\\s{1,}([\\w]+)\\s{1,}(?:of|in)\\s{1,}${document.getText(wordRange)}[^\\w]`);
+            const ngForValueRegex = new RegExp(`(let\\s{1,}${document.getText(wordRange)}\\s{1,}(?:of|in)\\s{1,})(\\w+)`);
+            const ngForCollectionMatch = ngForCollectionRegex.exec(lineText);
+            const ngForValueMatch = ngForValueRegex.exec(lineText);
+            if (ngForCollectionMatch !== null && ngForCollectionMatch !== undefined) {
+                isProperty = true;
             }
-            catch (e) {
-                console.error(e);
+            else if (ngForValueMatch !== null && ngForValueMatch !== undefined) {
+                cursorRange = document.validateRange(new vscode.Range(new vscode.Position(position.line, ngForValueMatch.index + ngForValueMatch[1].length), new vscode.Position(position.line, ngForValueMatch.index + ngForValueMatch[0].length)));
+                isProperty = true;
+            }
+            else {
+                isProperty = this._isProperty(lineText, wordRange.start.character, wordRange.end.character);
+            }
+            if (isProperty) {
+                result = this._findLocationsWithTemplateUrl(document, cursorRange || wordRange, token)
+                    .then(result => {
+                    const adjustTasks = [];
+                    for (let link of result.links || []) {
+                        adjustTasks.push(this._checkPropertyPosition(document.getText(cursorRange || wordRange), link, wordRange));
+                    }
+                    return Promise.all(adjustTasks.filter(link => link !== null && link !== undefined));
+                });
             }
         }
         return result;
