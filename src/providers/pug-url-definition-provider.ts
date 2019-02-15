@@ -210,6 +210,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                     const tagRegex = new RegExp(`@(Component|Directive)(?:\\s+)?\\((?:\\s+)?\\{(?:[^]+)?selector(?:\\s+)?:(?:\\s+)?([\'\"])${tagName.replace(/(\[|\(|\]|\))/g, '\\$1')}\\2\\,?(?:[^]+)?\\}(?:\\s+)?\\)`, "i");
                     const match = tagRegex.exec(document.getText());
                     if (match) {
+                        console.log(match[0]);
                         const startPosition = document.positionAt(match.index);
                         const endPosition = document.positionAt(match.index + match[0].length);
                         const link: vscode.LocationLink = {
@@ -874,17 +875,17 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                     ).length;
                     const constructorRegex = new RegExp(`(constructor(?:[\\s\\S]+)?(?:private|public|protected)\\s+)${propertyName}(?:\\s+)?:?`, 'm');
                     const getterRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?(?:get|set)(?:\\s+))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
-                    const anyRegex = new RegExp(`(?:[^\\w-])${propertyName}(?!\\.|(?:\\s+)?=(?:\\s+)?|\w):?`);
+                    const anyRegex = new RegExp(`(?:[^\\w-\\\\\\/.])${propertyName}(?!\\.|(?:\\s+)?=(?:\\s+)?|\\w):?|(private|public|protected)\\s*${propertyName}[^\\w]`);
                     const match = constructorRegex.exec(documentText) || getterRegex.exec(documentText) || anyRegex.exec(documentText);
 
                     if (match) {
                         link.targetRange = new vscode.Range(
-                            document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length: 0)),
-                            document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length: 0) + propertyName.length)
+                            document.positionAt(skippedLength + match.index + (match[1] ? match[1].length: anyRegex ? 1 : 0)),
+                            document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length: anyRegex ? 1 : 0) + propertyName.length)
                         );
                         link.targetSelectionRange = new vscode.Range(
-                            document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length: 0)),
-                            document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length: 0) + propertyName.length)
+                            document.positionAt(skippedLength + match.index + (match[1] ? match[1].length: anyRegex ? 1 : 0)),
+                            document.positionAt(skippedLength + match.index + (match[1] ? match[1].length: anyRegex ? 1 : 0) + propertyName.length)
                         );
                         resolve(link);
                     } else {

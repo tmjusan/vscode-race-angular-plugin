@@ -481,13 +481,13 @@ class PugUrlDefinitionProvider {
         return result;
     }
     _checkTagAttributeSelectorUri(document, position, token) {
-        const attributeSelectorRegex = /\[[$a-zA-Z0-9_]+\]|\[\([$a-zA-Z0-9_]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_]+/;
+        const attributeSelectorRegex = /\[[$a-zA-Z0-9_-]+\]|\[\([$a-zA-Z0-9_-]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_-]+/;
         const wordRange = document.getWordRangeAtPosition(position, attributeSelectorRegex);
         let result = null;
         const attributeName = document.getText(wordRange);
         if (wordRange !== null && wordRange !== undefined) {
             const line = document.lineAt(wordRange.start);
-            const checkRegex = new RegExp(`${attributeName.replace(/(\[|\(|\]|\))/g, '\\$1')}(?:(?:\\s+)*=(?:\\s+)*(?:require\\()?((["'])(?:[^\\n\\r,]+|([\\[{])[^\\n\\r]+[\\]}])\\2\\)?)?|\\,|(?:\\s+)?\\))`, "g");
+            const checkRegex = new RegExp(`${attributeName.replace(/(\[|\(|\]|\))/g, '\\$1')}(?:(?:\\s+)*=[^=](?:\\s+)*(?:require\\()?((["'])(?:[^\\n\\r,]+|([\\[{])[^\\n\\r]+[\\]}])\\2\\)?)?|\\,|(?:\\s+)?\\))`, "g");
             const match = checkRegex.exec(line.text);
             if (match) {
                 if (match[1] === null || match[1] === undefined) {
@@ -796,11 +796,11 @@ class PugUrlDefinitionProvider {
                 const skippedLength = document.getText(new vscode.Range(document.positionAt(0), link.targetRange.start)).length;
                 const constructorRegex = new RegExp(`(constructor(?:[\\s\\S]+)?(?:private|public|protected)\\s+)${propertyName}(?:\\s+)?:?`, 'm');
                 const getterRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?(?:get|set)(?:\\s+))${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
-                const anyRegex = new RegExp(`(?:[^\\w-])${propertyName}(?!\\.|(?:\\s+)?=(?:\\s+)?|\w):?`);
+                const anyRegex = new RegExp(`(?:[^\\w-\\\\\\/.])${propertyName}(?!\\.|(?:\\s+)?=(?:\\s+)?|\\w):?|(private|public|protected)\\s*${propertyName}[^\\w]`);
                 const match = constructorRegex.exec(documentText) || getterRegex.exec(documentText) || anyRegex.exec(documentText);
                 if (match) {
-                    link.targetRange = new vscode.Range(document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length : 0)), document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length : 0) + propertyName.length));
-                    link.targetSelectionRange = new vscode.Range(document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length : 0)), document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length : 0) + propertyName.length));
+                    link.targetRange = new vscode.Range(document.positionAt(skippedLength + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0)), document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0) + propertyName.length));
+                    link.targetSelectionRange = new vscode.Range(document.positionAt(skippedLength + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0)), document.positionAt(skippedLength + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0) + propertyName.length));
                     resolve(link);
                 }
                 else {
@@ -812,12 +812,11 @@ class PugUrlDefinitionProvider {
         });
     }
     _checkPropertyDefinition(document, position, token) {
-        const excludeRegex = /[^\s-+=.'"()[\]{}!]+/;
+        const excludeRegex = /(?!\d|\W)[^\s-+=.'"()[\]{}!]+/;
         const wordRange = document.getWordRangeAtPosition(position, excludeRegex);
         let result = null;
         if (wordRange !== null && wordRange !== undefined) {
             const lineText = document.lineAt(wordRange.start).text;
-            console.log('checking property:', document.getText(wordRange));
             try {
                 if (this._isProperty(lineText, wordRange.start.character, wordRange.end.character)) {
                     result = this._findLocationsWithTemplateUrl(document, wordRange, token)
