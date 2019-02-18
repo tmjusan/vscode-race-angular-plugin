@@ -13,6 +13,8 @@ class PugUrlDefinitionProvider {
         this._tagClearCacheTimeout = {};
         this._templateUrlCache = {};
         this._templateUrlClearCacheTimeout = {};
+        this._pug = vscode.extensions.getExtension('vscode.pug');
+        /* empty */
     }
     _checkIncludesUri(document, position, token) {
         const wordRange = document.getWordRangeAtPosition(position, /[\s+]?include[\s]+((?:(?:[^<>:;,?"*|\\\/\n\r]+)?[\\\/](?:[^<>:;,?"*|\\\/\n\r]+))+)/g);
@@ -369,6 +371,27 @@ class PugUrlDefinitionProvider {
                         location: link
                     });
                 }
+                else if (/(\[\(|\(\[)ngModel\)?\]?/i.test(attribute)) {
+                    const ngAccessorRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?)writeValue(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s|:]+\\{`, 'gm');
+                    const ngAccessorMath = ngAccessorRegex.exec(document.getText());
+                    if (ngAccessorMath) {
+                        const startPosition = document.positionAt(ngAccessorMath.index + (ngAccessorMath[1] ? ngAccessorMath[1].length : 0));
+                        const endPosition = document.positionAt(ngAccessorMath.index + (ngAccessorMath[1] ? ngAccessorMath[1].length : 0) + ngAccessorMath.length);
+                        const link = {
+                            originSelectionRange: originSelectionRange,
+                            targetUri: vscode.Uri.file(document.fileName),
+                            targetRange: new vscode.Range(startPosition, endPosition),
+                            targetSelectionRange: new vscode.Range(startPosition, new vscode.Position(startPosition.line, document.lineAt(startPosition.line).text.length))
+                        };
+                        resolve({
+                            uri: uri,
+                            location: link
+                        });
+                    }
+                    else {
+                        resolve({ uri: uri, location: null });
+                    }
+                }
                 else {
                     resolve({ uri: uri, location: null });
                 }
@@ -721,11 +744,14 @@ class PugUrlDefinitionProvider {
         return new Promise(resolve => {
             vscode.workspace.openTextDocument(link.targetUri)
                 .then(document => {
-                const functionRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?)${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
+                const functionRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?)${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s|:]+\\{`, 'gm');
                 const match = functionRegex.exec(document.getText());
                 if (match) {
                     link.targetRange = new vscode.Range(document.positionAt(match.index + (match[1] ? match[1].length : 0)), document.positionAt(match.index + (match[1] ? match[1].length : 0) + propertyName.length));
                     link.targetSelectionRange = new vscode.Range(document.positionAt(match.index + (match[1] ? match[1].length : 0)), document.positionAt(match.index + (match[1] ? match[1].length : 0) + propertyName.length));
+                }
+                else {
+                    console.warn(`could not find method ${propertyName} in ${link.targetUri.fsPath}`);
                 }
                 resolve(link);
             }, () => {

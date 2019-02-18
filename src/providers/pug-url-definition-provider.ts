@@ -5,7 +5,6 @@ import { CheckFileResult } from '../interfaces/check-file-result';
 import { clearTimeout } from 'timers';
 import { FindSelectorResult } from '../interfaces/find-selector-result';
 import { FindLocationResult } from '../interfaces/find-location-result';
-import { performance } from 'perf_hooks';
 
 export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
 
@@ -19,6 +18,12 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
     private readonly _templateUrlCache: {[path: string]: Array<vscode.Uri>} = {};
     private _templateUrlClearCacheTimeout: {[path: string]: NodeJS.Timeout} = {};
 
+    private _pug: vscode.Extension<any> | undefined = vscode.extensions.getExtension('vscode.pug');
+
+    constructor() {
+        /* empty */
+    }
+    
     private _checkIncludesUri(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
         const wordRange = document.getWordRangeAtPosition(position, /[\s+]?include[\s]+((?:(?:[^<>:;,?"*|\\\/\n\r]+)?[\\\/](?:[^<>:;,?"*|\\\/\n\r]+))+)/g);
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null;
@@ -402,6 +407,30 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                             uri: uri,
                             location: link
                         });
+                    } else if (/(\[\(|\(\[)ngModel\)?\]?/i.test(attribute)) {
+                        const ngAccessorRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?)writeValue(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s|:]+\\{`, 'gm');
+                        const ngAccessorMath = ngAccessorRegex.exec(document.getText());
+                        if (ngAccessorMath) {
+                            const startPosition = document.positionAt(ngAccessorMath.index + (ngAccessorMath[1] ? ngAccessorMath[1].length: 0));
+                            const endPosition = document.positionAt(ngAccessorMath.index + (ngAccessorMath[1] ? ngAccessorMath[1].length: 0) + ngAccessorMath.length);
+                            const link: vscode.LocationLink = {
+                                originSelectionRange: originSelectionRange,
+                                targetUri: vscode.Uri.file(document.fileName),
+                                targetRange: new vscode.Range(startPosition, endPosition),
+                                targetSelectionRange: new vscode.Range(startPosition, 
+                                    new vscode.Position(
+                                        startPosition.line, 
+                                        document.lineAt(startPosition.line).text.length
+                                        )
+                                    )
+                            };
+                            resolve({
+                                uri: uri,
+                                location: link
+                            });
+                        } else {
+                            resolve({uri: uri, location: null});
+                        }
                     } else {
                         resolve({uri: uri, location: null});
                     }
@@ -773,7 +802,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         return new Promise<vscode.LocationLink>(resolve => {
             vscode.workspace.openTextDocument(link.targetUri)
                 .then(document => {
-                    const functionRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?)${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s:]+\\{`, 'gm');
+                    const functionRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?)${propertyName}(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s|:]+\\{`, 'gm');
                     const match = functionRegex.exec(document.getText());
                     if (match) {
                         link.targetRange = new vscode.Range(
@@ -784,6 +813,8 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                             document.positionAt(match.index + (match[1] ? match[1].length: 0)),
                             document.positionAt(match.index + (match[1] ? match[1].length: 0) + propertyName.length)
                         );
+                    } else {
+                        console.warn(`could not find method ${propertyName} in ${link.targetUri.fsPath}`);
                     }
                     resolve(link);
                 }, () => {
@@ -961,6 +992,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
     }
 
     provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.LocationLink[]> {
+        
         return this._checkIncludesUri(document, position, token) || 
             this._checkMixinsUri(document, position, token) ||
             this._checkNgSelectorUri(document, position, token) ||
