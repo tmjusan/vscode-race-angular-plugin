@@ -477,20 +477,23 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
             let result: boolean = false;
             let openedCount: number = 0;
             tagNameRegex.lastIndex = 0;
-            if (tagNameRegex.test(line)) {
+            // counting number of opened and closed brackets
+            for (let i = 0, l = line.length; i < l; ++i) {
+                if (line[i] === ')') {
+                    // if number of closed bigger, will count that declaration ends here
+                    if (--openedCount < 0) {
+                        result = true;
+                        break;
+                    }
+                } else if (line[i] === '(') {
+                    ++openedCount;
+                }
+            }
+            // if number of opened / closed brackets is even and same line contains 
+            // tag name, then will count that declaration ends in the same line
+            if (tagNameRegex.test(line) && openedCount === 0) {
                 tagNameRegex.lastIndex = 0;
                 result = true;
-            } else {
-                for (let i = 0, l = line.length; i < l; ++i) {
-                    if (line[i] === ')') {
-                        if (--openedCount < 0) {
-                            result = true;
-                            break;
-                        }
-                    } else if (line[i] === '(') {
-                        ++openedCount;
-                    }
-                }
             }
             return result;
         };
