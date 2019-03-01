@@ -12,19 +12,19 @@ export function activate(context: vscode.ExtensionContext) {
   	      new FileUrlDefinitionProvider()
 	  );
 	  
-	    const urlPugRegistration = vscode.languages.registerDefinitionProvider(
-		  {
-			  language: 'jade',
-		  	pattern: '**/*.{jade,pug}',
-			  scheme: 'file',
-		  },
-  	      new PugUrlDefinitionProvider()
-  	  );
+	  const urlPugRegistration = vscode.languages.registerDefinitionProvider(
+		{
+		    language: 'jade',
+			  pattern: '**/*.{jade,pug}',
+		    scheme: 'file',
+		},
+  	    new PugUrlDefinitionProvider()
+		);
 
-  	  context.subscriptions.push(
-		  	urlRegistration,
-		   	urlPugRegistration
-  	  );
+  	context.subscriptions.push(
+			  urlRegistration,
+		 	  urlPugRegistration
+  	);
 }
 
 // this method is called when your extension is deactivated

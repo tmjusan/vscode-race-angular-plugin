@@ -15,7 +15,7 @@ export class FileUrlDefinitionProvider implements vscode.DefinitionProvider {
             } else {
                 relativeUri = relativeUri.substring(1, relativeUri.length - 1);
             }
-            result = getFileLocationOrNull(document, position, relativeUri);
+            result = getFileLocationOrNull(document, wordRange, relativeUri);
         } else {
             result = null;
         }

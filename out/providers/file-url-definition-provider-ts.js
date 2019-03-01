@@ -14,7 +14,7 @@ class FileUrlDefinitionProvider {
             else {
                 relativeUri = relativeUri.substring(1, relativeUri.length - 1);
             }
-            result = get_file_location_or_null_1.getFileLocationOrNull(document, position, relativeUri);
+            result = get_file_location_or_null_1.getFileLocationOrNull(document, wordRange, relativeUri);
         }
         else {
             result = null;

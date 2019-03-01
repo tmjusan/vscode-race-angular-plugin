@@ -5,58 +5,47 @@ import { CheckFileResult } from '../interfaces/check-file-result';
 import { clearTimeout } from 'timers';
 import { FindSelectorResult } from '../interfaces/find-selector-result';
 import { FindLocationResult } from '../interfaces/find-location-result';
+import { PugService } from '../services/pug-service';
+import { pugLocationToRange } from '../utils/pug-location-to-range';
+import { PugAttributeToken } from '../interfaces/pug-token';
 
 export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
 
-    private readonly _tagNameRegex = /^(?!include|\.|#|\/\/)(?:\s+)?([a-zA-Z0-9_$-]+)((?:\.[a-zA-Z_-]+)+)?(?:\(|\s|$)[^,\)]/gm;
-    private readonly _tagAttributesRegex = /[a-zA-Z_$]((?:\s+)?\((?:(?:(?:\s+)?[^\s]+(?:\s+)?=(?:\s+)?(?:(?:(['"])[^\n\r]+\2)|(?:require(?:\s+)?\(["'][^\s"']+["']\)))\,?)|(?:(?:\s+)?(?:#|)[a-zA-Z-_]+)\,?(?:\s+)?)+\))/gm;
-    private readonly _attributeSelectorRegex = /(\[[$a-zA-Z0-9_]+\]|\[\([$a-zA-Z0-9_]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_]+)(?:(?:\s+)*=(?:\s+)*((["'])[^\n\r]+\3)?|\,|(?:\s+)?\))/g;
-    
-    private readonly _tagUriCache: {[tagName: string]: Array<vscode.Uri>} = {};
-    private _tagClearCacheTimeout: {[tagName: string]: NodeJS.Timeout} = {};
-    
-    private readonly _templateUrlCache: {[path: string]: Array<vscode.Uri>} = {};
-    private _templateUrlClearCacheTimeout: {[path: string]: NodeJS.Timeout} = {};
+    private readonly _tagUriCache: { [tagName: string]: Array<vscode.Uri> } = {};
+    private _tagClearCacheTimeout: { [tagName: string]: NodeJS.Timeout } = {};
 
-    private _pug: vscode.Extension<any> | undefined = vscode.extensions.getExtension('vscode.pug');
+    private readonly _templateUrlCache: { [path: string]: Array<vscode.Uri> } = {};
+    private _templateUrlClearCacheTimeout: { [path: string]: NodeJS.Timeout } = {};
+
+    private _pug: PugService = new PugService();
 
     constructor() {
         /* empty */
     }
-    
-    private _checkIncludesUri(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
-        const wordRange = document.getWordRangeAtPosition(position, /[\s+]?include[\s]+((?:(?:[^<>:;,?"*|\\\/\n\r]+)?[\\\/](?:[^<>:;,?"*|\\\/\n\r]+))+)/g);
-        let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null;
 
-        if (wordRange !== null && wordRange !== undefined) {
-            let relativeUri = document.getText(wordRange);
-            let match = /[\s+]?include[\s]+((?:(?:[^<>:;,?"*|\\\/\n\r]+)?[\\\/](?:[^<>:;,?"*|\\\/\n\r]+))+)/g.exec(relativeUri);
-            if (match !== null) {
-                relativeUri = match[1];
-            }
-            if (relativeUri !== null && relativeUri !== undefined) {
-                if (relativeUri.endsWith('.pug') || relativeUri.endsWith('.jade')) {
-                    result = getFileLocationOrNull(document, position, relativeUri);
-                } else {
-                    result = new Promise<Array<vscode.LocationLink> | null>(resolve => {
-                        Promise.all([
-                            getFileLocationOrNull(document, position, `${relativeUri}.pug`),
-                            getFileLocationOrNull(document, position, `${relativeUri}.jade`)
-                        ]).then(results => {
-                            for (let result of results) {
-                                if (result) {
-                                    resolve(result);
-                                    return;
-                                }
-                            }
-                            resolve(null);
-                        }).catch(errors => {
-                            resolve(null);
-                        });
-                    });
-                }
+    private _checkIncludesUri(document: vscode.TextDocument, relativeUri: string, wordRange: vscode.Range, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
+        let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
+
+        if (relativeUri !== null && relativeUri !== undefined && wordRange !== null && wordRange !== undefined) {
+            if (relativeUri.endsWith('.pug') || relativeUri.endsWith('.jade')) {
+                result = getFileLocationOrNull(document, wordRange, relativeUri);
             } else {
-                result = null;
+                result = new Promise<Array<vscode.LocationLink> | null>(resolve => {
+                    Promise.all([
+                        getFileLocationOrNull(document, wordRange, `${relativeUri}.pug`),
+                        getFileLocationOrNull(document, wordRange, `${relativeUri}.jade`)
+                    ]).then(results => {
+                        for (let result of results) {
+                            if (result) {
+                                resolve(result);
+                                return;
+                            }
+                        }
+                        resolve(null);
+                    }).catch(errors => {
+                        resolve(null);
+                    });
+                });
             }
         } else {
             result = null;
@@ -92,12 +81,12 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                             originSelectionRange: originSelectionRange,
                             targetUri: vscode.Uri.file(filePath),
                             targetRange: new vscode.Range(startPosition, endPosition),
-                            targetSelectionRange: new vscode.Range(startPosition, 
+                            targetSelectionRange: new vscode.Range(startPosition,
                                 new vscode.Position(
-                                    startPosition.line, 
+                                    startPosition.line,
                                     pugFileDocument.lineAt(startPosition.line).text.length
-                                    )
                                 )
+                            )
                         };
                         resolve(link);
                     } else {
@@ -147,62 +136,47 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         });
     }
 
-    private _checkMixinsUri(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
-        const wordRange = document.getWordRangeAtPosition(position, /^(?:[\s]+)?\+([^()\+\s]+)/gm);
-
+    private _checkMixinsUri(document: vscode.TextDocument, mixinName: string, wordRange: vscode.Range, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null;
-        if (wordRange !== null && wordRange !== undefined) {
-            let mixinName = document.getText(wordRange);
-            let match = /\+[^+\(\s]+/g.exec(mixinName);
-            if (match !== null) {
-                mixinName = match[0];
-            }
-            if (mixinName !== null && mixinName !== undefined) {
-                result = new Promise<Array<vscode.LocationLink> | null>(resolve => {
-                    let filePaths: Array<string> = [
-                        document.fileName
-                    ];
-                    const findMixinTasks: Array<Promise<vscode.LocationLink | null>> = [];
-                    const links: Array<vscode.LocationLink> = [];
-                    this._getIncludesPaths(document)
-                        .then(paths => {
-                            filePaths = [...filePaths, ...paths];
-                            let range: vscode.Range = (match !== null && match !== undefined) ? new vscode.Range(
-                                new vscode.Position(wordRange.start.line, match.index),
-                                new vscode.Position(wordRange.start.line, match.index + match[0].length)
-                            ) : wordRange;
-                            for (let path of filePaths) {
-                                findMixinTasks.push(
-                                    this._checkFileContainsMixin(mixinName, path, range)
-                                );
-                            }
-                            Promise.all(findMixinTasks)
-                                .then(results => {
-                                    for (let result of results) {
-                                        if (result !== null && result !== undefined) {
-                                            links.push(result);
-                                        }
+        if (mixinName !== null && mixinName !== undefined && wordRange !== null && wordRange !== undefined) {
+            result = new Promise<Array<vscode.LocationLink> | null>(resolve => {
+                let filePaths: Array<string> = [
+                    document.fileName
+                ];
+                const findMixinTasks: Array<Promise<vscode.LocationLink | null>> = [];
+                const links: Array<vscode.LocationLink> = [];
+                this._getIncludesPaths(document)
+                    .then(paths => {
+                        filePaths = [...filePaths, ...paths];
+                        for (let path of filePaths) {
+                            findMixinTasks.push(
+                                this._checkFileContainsMixin(mixinName, path, wordRange)
+                            );
+                        }
+                        Promise.all(findMixinTasks)
+                            .then(results => {
+                                for (let result of results) {
+                                    if (result !== null && result !== undefined) {
+                                        links.push(result);
                                     }
-                                    resolve(links);
-                                }).catch(errors => {
-                                    if (errors !== null && errors !== undefined) {
-                                        console.error(errors);
-                                    }
-                                    resolve(null);
-                                });
-                        }).catch(errors => {
-                            if (errors !== null && errors !== undefined) {
-                                console.error(errors);
-                            }
-                            resolve(null);
-                        });
-                }).catch(e => {
-                    console.error(e);
-                    return e;
-                });
-            } else {
-                result = null;
-            }
+                                }
+                                resolve(links);
+                            }).catch(errors => {
+                                if (errors !== null && errors !== undefined) {
+                                    console.error(errors);
+                                }
+                                resolve(null);
+                            });
+                    }).catch(errors => {
+                        if (errors !== null && errors !== undefined) {
+                            console.error(errors);
+                        }
+                        resolve(null);
+                    });
+            }).catch(e => {
+                console.error(e);
+                return e;
+            });
         } else {
             result = null;
         }
@@ -227,19 +201,19 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                             originSelectionRange: originSelectionRange,
                             targetUri: vscode.Uri.file(document.fileName),
                             targetRange: new vscode.Range(startPosition, endPosition),
-                            targetSelectionRange: new vscode.Range(startPosition, 
+                            targetSelectionRange: new vscode.Range(startPosition,
                                 new vscode.Position(
-                                    startPosition.line, 
+                                    startPosition.line,
                                     document.lineAt(startPosition.line).text.length
-                                    )
                                 )
+                            )
                         };
                         resolve({
                             uri: uri,
                             location: link
                         });
                     } else {
-                        resolve({uri: uri, location: null});
+                        resolve({ uri: uri, location: null });
                     }
                 }, error => {
                     reject(error);
@@ -266,7 +240,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                             // Filter similar results
                             const findResult = result.find(loc => {
                                 return checkResult.location !== null && checkResult.location !== undefined &&
-                                    loc !== null && loc !== undefined && 
+                                    loc !== null && loc !== undefined &&
                                     loc.targetUri.path === checkResult.location.targetUri.path;
                             });
                             if (findResult === null || findResult === undefined) {
@@ -285,7 +259,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         });
     }
 
-    private _findLocationsWithSelector(tag: string, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<FindLocationResult>  {
+    private _findLocationsWithSelector(tag: string, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<FindLocationResult> {
         if (tag === null || tag === undefined) {
             return Promise.resolve({
                 selector: tag,
@@ -296,7 +270,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
             this._findLocationWithTagNameCached(tag, originSelectionRange, token)
                 .then(results => {
                     resolve({
-                        selector: tag, 
+                        selector: tag,
                         links: results
                     });
                 })
@@ -321,7 +295,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                                             // Filter similar results
                                             const findResult = result.find(loc => {
                                                 return checkResult.location !== null && checkResult.location !== undefined &&
-                                                    loc !== null && loc !== undefined && 
+                                                    loc !== null && loc !== undefined &&
                                                     loc.targetUri.path === checkResult.location.targetUri.path;
                                             });
                                             if (findResult === null || findResult === undefined) {
@@ -339,7 +313,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                                         }, 10 * 60 * 1000); // cache for 10 minutes
                                     }
                                     resolve({
-                                        selector: tag, 
+                                        selector: tag,
                                         links: result
                                     });
                                 }).catch(errors => {
@@ -347,7 +321,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                                         console.error(errors);
                                     }
                                     resolve({
-                                        selector: tag, 
+                                        selector: tag,
                                         links: result
                                     });
                                 });
@@ -356,7 +330,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         });
     }
 
-    private _findAttributeWithSelector(uri: vscode.Uri, attribute: string, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<CheckFileResult>  {
+    private _findAttributeWithSelector(uri: vscode.Uri, attribute: string, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<CheckFileResult> {
         if (attribute === null || attribute === undefined || token.isCancellationRequested) {
             return Promise.resolve({
                 uri: uri,
@@ -367,6 +341,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
             vscode.workspace.openTextDocument(uri)
                 .then(document => {
                     const selectorName: string = attribute.replace(/(\[|\(|\]|\))/g, '');
+
                     const attributrSelectorRegex = new RegExp(`@(Input|Output|Optional)\\((?:(['"])${selectorName}\\2)\\)(?:\\s+)([\\w]+)`, "gi");
                     const attributrNameRegex = new RegExp(`@(Input|Output|Optional)\\((?:\\s+)?\\)\\s*(?:set|get)?\\s*${selectorName}`, "gi");
                     const selectorMatch = attributrSelectorRegex.exec(document.getText());
@@ -378,12 +353,12 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                             originSelectionRange: originSelectionRange,
                             targetUri: vscode.Uri.file(document.fileName),
                             targetRange: new vscode.Range(startPosition, endPosition),
-                            targetSelectionRange: new vscode.Range(startPosition, 
+                            targetSelectionRange: new vscode.Range(startPosition,
                                 new vscode.Position(
-                                    startPosition.line, 
+                                    startPosition.line,
                                     document.lineAt(startPosition.line).text.length
-                                    )
                                 )
+                            )
                         };
                         resolve({
                             uri: uri,
@@ -396,12 +371,12 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                             originSelectionRange: originSelectionRange,
                             targetUri: vscode.Uri.file(document.fileName),
                             targetRange: new vscode.Range(startPosition, endPosition),
-                            targetSelectionRange: new vscode.Range(startPosition, 
+                            targetSelectionRange: new vscode.Range(startPosition,
                                 new vscode.Position(
-                                    startPosition.line, 
+                                    startPosition.line,
                                     document.lineAt(startPosition.line).text.length
-                                    )
                                 )
+                            )
                         };
                         resolve({
                             uri: uri,
@@ -411,28 +386,28 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                         const ngAccessorRegex = new RegExp(`^((?:\\s+)?(?:(?:public|private|protected)(?:\\s+))?)writeValue(?:\\s+)?\\(([a-zA-Z:\\s,\\n\\r.?$]+|)\\)(?:\\s+)?:?[a-zA-Z\\s|:]+\\{`, 'gm');
                         const ngAccessorMath = ngAccessorRegex.exec(document.getText());
                         if (ngAccessorMath) {
-                            const startPosition = document.positionAt(ngAccessorMath.index + (ngAccessorMath[1] ? ngAccessorMath[1].length: 0));
-                            const endPosition = document.positionAt(ngAccessorMath.index + (ngAccessorMath[1] ? ngAccessorMath[1].length: 0) + ngAccessorMath.length);
+                            const startPosition = document.positionAt(ngAccessorMath.index + (ngAccessorMath[1] ? ngAccessorMath[1].length : 0));
+                            const endPosition = document.positionAt(ngAccessorMath.index + (ngAccessorMath[1] ? ngAccessorMath[1].length : 0) + ngAccessorMath.length);
                             const link: vscode.LocationLink = {
                                 originSelectionRange: originSelectionRange,
                                 targetUri: vscode.Uri.file(document.fileName),
                                 targetRange: new vscode.Range(startPosition, endPosition),
-                                targetSelectionRange: new vscode.Range(startPosition, 
+                                targetSelectionRange: new vscode.Range(startPosition,
                                     new vscode.Position(
-                                        startPosition.line, 
+                                        startPosition.line,
                                         document.lineAt(startPosition.line).text.length
-                                        )
                                     )
+                                )
                             };
                             resolve({
                                 uri: uri,
                                 location: link
                             });
                         } else {
-                            resolve({uri: uri, location: null});
+                            resolve({ uri: uri, location: null });
                         }
                     } else {
-                        resolve({uri: uri, location: null});
+                        resolve({ uri: uri, location: null });
                     }
                 }, () => {
                     resolve({
@@ -443,191 +418,57 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         });
     }
 
-    private _checkNgSelectorUri(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
-        const tagNameRegex = /^(?:\s+)?([a-zA-Z0-9_$-]+)((?:\.[a-zA-Z_0-9-]+)+)?(?:\(|\s|$)[^,\)]*/;
-        const wordRange = document.getWordRangeAtPosition(position, tagNameRegex);
+    private _checkNgSelectorUri(selector: string, wordRange: vscode.Range, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
         if (wordRange !== null && wordRange !== undefined) {
-            const line = document.lineAt(wordRange.start);
-            let tagMatch = /^(?:((?!include|\.)(?:\s+))?([a-zA-Z0-9_-]+))/.exec(line.text);
-            const tagNameStart = tagMatch && tagMatch[1] && tagMatch[1].length || 0;
-            const tagNameEnd = tagNameStart + (tagMatch && tagMatch[2] && tagMatch[2].length || 0);
-            if (tagMatch && position.character >= tagNameStart && position.character <= tagNameEnd ) {
-                const tagName = tagMatch[2];
-                const originSelectionRange: vscode.Range = new vscode.Range(
-                    new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex),
-                    new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex + (tagName && tagName.length || 0))
-                );
-                result = this._findLocationsWithSelector(tagName, originSelectionRange, token)
-                    .then(result => result.links);
-            }
+            result = this._findLocationsWithSelector(selector, wordRange, token)
+                .then(result => result.links);
         }
-
         return result;
     }
 
-    private _findSelectorName(document: vscode.TextDocument, position: vscode.Position): FindSelectorResult {
-        let result: FindSelectorResult = {
-            tag: null,
-            attribute: null
-        };
-        const tagNameRegex = new RegExp(this._tagNameRegex, "gm");
-        const attributeSelectorRegex = new RegExp(this._attributeSelectorRegex, "g");
-        const isEndOfDeclaration = (line: string): boolean => {
-            let result: boolean = false;
-            let openedCount: number = 0;
-            tagNameRegex.lastIndex = 0;
-            // counting number of opened and closed brackets
-            for (let i = 0, l = line.length; i < l; ++i) {
-                if (line[i] === ')') {
-                    // if number of closed bigger, will count that declaration ends here
-                    if (--openedCount < 0) {
-                        result = true;
-                        break;
-                    }
-                } else if (line[i] === '(') {
-                    ++openedCount;
-                }
-            }
-            // if number of opened / closed brackets is even and same line contains 
-            // tag name, then will count that declaration ends in the same line
-            if (tagNameRegex.test(line) && openedCount === 0) {
-                tagNameRegex.lastIndex = 0;
-                result = true;
-            }
-            return result;
-        };
-        const isBeginningOfDeclaration = (line: string): boolean => {
-            return /^(?:\s+)?[.#a-zA-Z_-]+\(/.test(line);
-        };
-        let searchText = document.lineAt(position.line).text;
-        let upLine: number = position.line;
-        let downLine: number = position.line;
-        let tagMatch = tagNameRegex.exec(searchText);
-        let attributeMatch = attributeSelectorRegex.exec(searchText);
-        let foundTag: string | null = tagMatch && tagMatch[1] || null;
-        let foundAttribute: string | null = attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
-        let range: vscode.Range = new vscode.Range(
-            new vscode.Position(upLine, 0),
-            new vscode.Position(downLine, 0)
-        );
-        let wentToEnd: boolean = false;
-        let wentToBeginning: boolean = false;
-        let count: number = 0;
-        while(foundAttribute === null && downLine < document.lineCount - 1 && !wentToEnd) {
-            tagNameRegex.lastIndex = 0;
-            attributeSelectorRegex.lastIndex = 0;
-            range = new vscode.Range(
-                new vscode.Position(upLine, 0),
-                new vscode.Position(downLine, document.lineAt(Math.min(downLine, document.lineCount)).text.length)
-            );
-            searchText = document.getText(document.validateRange(range));
-            tagMatch = tagNameRegex.exec(searchText);
-            attributeMatch = attributeSelectorRegex.exec(searchText);
-            foundTag = foundTag || tagMatch && tagMatch[1] || null;
-            foundAttribute = foundAttribute || attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
-            if (isEndOfDeclaration(document.lineAt(downLine).text)) {
-                wentToEnd = true;
-            } else {
-                downLine++;
-            }
-            if (++count > 100) {
-                break;
-            }
-        }
-        while(foundTag === null && upLine > 0 && !wentToBeginning) {
-            tagNameRegex.lastIndex = 0;
-            attributeSelectorRegex.lastIndex = 0;
-            range = new vscode.Range(
-                new vscode.Position(upLine, 0),
-                new vscode.Position(downLine, document.lineAt(Math.min(downLine, document.lineCount)).text.length)
-            );
-            searchText = document.getText(document.validateRange(range));
-            tagMatch = tagNameRegex.exec(searchText);
-            attributeMatch = attributeSelectorRegex.exec(searchText);
-            foundTag = foundTag || tagMatch && tagMatch[1] || null;
-            foundAttribute = foundAttribute || attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
-            if (isBeginningOfDeclaration(document.lineAt(upLine).text)) {
-                wentToBeginning = true;
-            } else {
-                upLine--;
-            }
-            if (++count > 100) {
-                break;
-            }
-        }
-        result = {
-            tag: foundTag, 
-            attribute: foundAttribute
-        };
-        return result;
-    }
-
-    private _checkTagAttributeSelectorUri(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
-        const attributeSelectorRegex = /\[[$a-zA-Z0-9_]+\]|\[\([$a-zA-Z0-9_]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_]+/;
-        const wordRange = document.getWordRangeAtPosition(position, attributeSelectorRegex);
+    private _checkTagAttributeSelectorUri(attributeName: string, selector: FindSelectorResult, wordRange: vscode.Range, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
-        const attributeName = document.getText(wordRange);
 
-        if (wordRange !== null && wordRange !== undefined) {
-            const line = document.lineAt(wordRange.start);
-            const checkRegex = new RegExp(`${attributeName.replace(/(\[|\(|\]|\))/g, '\\$1')}(?:\\s*=\\s*(?:require\\s*\\()?((["'])(?:[^\\n\\r]*|([\\[{])[^\\n\\r]+[\\]}])\\2))?(?:,|\\s*\\))(?!"|')`);
-            const match = checkRegex.exec(line.text);
-            if (match) {
-                if (match[1] === null || match[1] === undefined) {
-                    if (!attributeName.startsWith('[')) {
-                        result = this._findLocationsWithSelector(`[${attributeName}]`, wordRange, token)
-                            .then(result => result.links);
-                    } else {
-                        result = this._findLocationsWithSelector(attributeName, wordRange, token)
-                            .then(result => result.links);
-                    }
-                } else {
-                    const selector = this._findSelectorName(document, position);
-                    let searchTasks: Array<Promise<FindLocationResult>> = [];
-                    if (selector.tag) {
-                        searchTasks.push(this._findLocationsWithSelector(selector.tag, wordRange, token));
-                    }
-                    if (selector.attribute !== null && selector.attribute !== undefined) {
-                        if (!selector.attribute.startsWith('[')) {
-                            searchTasks.push(this._findLocationsWithSelector(`[${selector.attribute}]`, wordRange, token));
-                        } else {
-                            searchTasks.push(this._findLocationsWithSelector(selector.attribute, wordRange, token));
+        if (selector.attribute && wordRange !== null && wordRange !== undefined) {
+            const searchTasks: Array<Promise<FindLocationResult>> = [];
+            if (selector.tag) {
+                searchTasks.push(this._findLocationsWithSelector(selector.tag, wordRange, token));
+            }
+            if (selector.attribute !== null && selector.attribute !== undefined && !selector.attribute.startsWith('[') && !selector.attribute.startsWith('(') && !selector.attribute.startsWith('*')) {
+                searchTasks.push(this._findLocationsWithSelector(`[${selector.attribute}]`, wordRange, token));
+            }
+            result = new Promise<Array<vscode.LocationLink> | null>(resolve => {
+                Promise.all(searchTasks)
+                    .then(results => {
+                        let searchAttributeTasks: Array<Promise<CheckFileResult>> = [];
+                        for (let taskResult of results) {
+                            if (taskResult.links) {
+                                for (let location of taskResult.links) {
+                                    searchAttributeTasks.push(this._findAttributeWithSelector(location.targetUri, attributeName, wordRange, token));
+                                }
+                            }
                         }
-                    }
-                    result = new Promise<Array<vscode.LocationLink> | null>(resolve => {
-                        Promise.all(searchTasks)
-                            .then(results => {
-                                let searchAttributeTasks: Array<Promise<CheckFileResult>> = [];
-                                for (let taskResult of results) {
-                                    if (taskResult.links) {
-                                        for (let location of taskResult.links) {
-                                            searchAttributeTasks.push(this._findAttributeWithSelector(location.targetUri, attributeName, wordRange, token));
-                                        }
+                        Promise.all(searchAttributeTasks)
+                            .then(attributeResults => {
+                                let locations: Array<vscode.LocationLink> = [];
+                                for (let result of attributeResults) {
+                                    if (result.location !== null && result.location !== undefined) {
+                                        locations.push(result.location);
                                     }
                                 }
-                                Promise.all(searchAttributeTasks)
-                                    .then(attributeResults => {
-                                        let locations: Array<vscode.LocationLink> = [];
-                                        for (let result of attributeResults) {
-                                            if (result.location !== null && result.location !== undefined) {
-                                                locations.push(result.location);
-                                            }
-                                        }
-                                        if (locations.length > 0) {
-                                            resolve(locations);
-                                        } else {
-                                            resolve(null);
-                                        }
-                                    }).catch(() => {
-                                        resolve(null);
-                                    });
+                                if (locations.length > 0) {
+                                    resolve(locations);
+                                } else {
+                                    resolve(null);
+                                }
                             }).catch(() => {
                                 resolve(null);
                             });
+                    }).catch(() => {
+                        resolve(null);
                     });
-                }
-            }
+            });
         }
         return result;
     }
@@ -694,7 +535,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                         uri: uri,
                         location: null
                     });
-                });           
+                });
         });
     }
 
@@ -717,7 +558,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                             // Filter similar results
                             const findResult = result.find(loc => {
                                 return checkResult.location !== null && checkResult.location !== undefined &&
-                                    loc !== null && loc !== undefined && 
+                                    loc !== null && loc !== undefined &&
                                     loc.targetUri.path === checkResult.location.targetUri.path;
                             });
                             if (findResult === null || findResult === undefined) {
@@ -736,12 +577,12 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         });
     }
 
-    private _findLocationsWithTemplateUrl(pugDocument: vscode.TextDocument, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<FindLocationResult>  {
+    private _findLocationsWithTemplateUrl(pugDocument: vscode.TextDocument, originSelectionRange: vscode.Range, token: vscode.CancellationToken): Promise<FindLocationResult> {
         return new Promise<FindLocationResult>(resolve => {
             this._findLocationWithTemplateUrlCached(pugDocument, originSelectionRange, token)
                 .then(results => {
                     resolve({
-                        selector: pugDocument.fileName, 
+                        selector: pugDocument.fileName,
                         links: results
                     });
                 })
@@ -766,7 +607,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                                             // Filter similar results
                                             const findResult = result.find(loc => {
                                                 return checkResult.location !== null && checkResult.location !== undefined &&
-                                                    loc !== null && loc !== undefined && 
+                                                    loc !== null && loc !== undefined &&
                                                     loc.targetUri.path === checkResult.location.targetUri.path;
                                             });
                                             if (findResult === null || findResult === undefined) {
@@ -784,7 +625,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                                         }, 10 * 60 * 1000); // cache for 10 minutes
                                     }
                                     resolve({
-                                        selector: pugDocument.fileName, 
+                                        selector: pugDocument.fileName,
                                         links: result
                                     });
                                 }).catch(errors => {
@@ -792,7 +633,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                                         console.error(errors);
                                     }
                                     resolve({
-                                        selector: pugDocument.fileName, 
+                                        selector: pugDocument.fileName,
                                         links: result
                                     });
                                 });
@@ -809,12 +650,12 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                     const match = functionRegex.exec(document.getText());
                     if (match) {
                         link.targetRange = new vscode.Range(
-                            document.positionAt(match.index + (match[1] ? match[1].length: 0)),
-                            document.positionAt(match.index + (match[1] ? match[1].length: 0) + propertyName.length)
+                            document.positionAt(match.index + (match[1] ? match[1].length : 0)),
+                            document.positionAt(match.index + (match[1] ? match[1].length : 0) + propertyName.length)
                         );
                         link.targetSelectionRange = new vscode.Range(
-                            document.positionAt(match.index + (match[1] ? match[1].length: 0)),
-                            document.positionAt(match.index + (match[1] ? match[1].length: 0) + propertyName.length)
+                            document.positionAt(match.index + (match[1] ? match[1].length : 0)),
+                            document.positionAt(match.index + (match[1] ? match[1].length : 0) + propertyName.length)
                         );
                     } else {
                         console.warn(`could not find method ${propertyName} in ${link.targetUri.fsPath}`);
@@ -835,7 +676,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
             const match = functionRegex.exec(document.getText(wordRange));
             const line = document.lineAt(position);
             if (match) {
-                if (wordRange.start.character === 0 || wordRange.start.character > 0 && 
+                if (wordRange.start.character === 0 || wordRange.start.character > 0 &&
                     !/[\.?\])+-=]/.test(line.text[wordRange.start.character - 1])) {
                     const propertyName = match[1];
                     const originSelectionRange: vscode.Range = new vscode.Range(
@@ -894,7 +735,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
             if (firstNonSpaceAfter === null && !spaceRegex.test(lineText[end])) {
                 firstNonSpaceAfter = lineText[end];
             }
-            if (firstNonSpaceBefore && firstNonSpaceAfter && 
+            if (firstNonSpaceBefore && firstNonSpaceAfter &&
                 quotesRegex.test(firstNonSpaceBefore) &&
                 excludeRegex.test(firstNonSpaceAfter)) {
                 result = true;
@@ -905,7 +746,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         }
 
         if (hadDoubleCurly() && result) {
-            result = !(firstNonSpaceBefore === "\"" && firstNonSpaceAfter === "\"") && 
+            result = !(firstNonSpaceBefore === "\"" && firstNonSpaceAfter === "\"") &&
                 !(firstNonSpaceBefore === "\'" && firstNonSpaceAfter === "\'");
         }
 
@@ -933,12 +774,12 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
 
                     if (match) {
                         link.targetRange = new vscode.Range(
-                            document.positionAt(skippedLength + match.index + (match[1] ? match[1].length: anyRegex ? 1 : 0)),
-                            document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length: anyRegex ? 1 : 0) + propertyName.length)
+                            document.positionAt(skippedLength + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0)),
+                            document.positionAt(skippedLength + 1 + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0) + propertyName.length)
                         );
                         link.targetSelectionRange = new vscode.Range(
-                            document.positionAt(skippedLength + match.index + (match[1] ? match[1].length: anyRegex ? 1 : 0)),
-                            document.positionAt(skippedLength + match.index + (match[1] ? match[1].length: anyRegex ? 1 : 0) + propertyName.length)
+                            document.positionAt(skippedLength + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0)),
+                            document.positionAt(skippedLength + match.index + (match[1] ? match[1].length : anyRegex ? 1 : 0) + propertyName.length)
                         );
                         if (originSelectionRange !== null && originSelectionRange !== undefined) {
                             link.originSelectionRange = originSelectionRange;
@@ -994,14 +835,64 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
         return result;
     }
 
-    provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.LocationLink[]> {
-        
-        return this._checkIncludesUri(document, position, token) || 
-            this._checkMixinsUri(document, position, token) ||
-            this._checkNgSelectorUri(document, position, token) ||
-            this._checkTagAttributeSelectorUri(document, position, token) ||
-            this._checkFunctionDefinition(document, position, token) ||
-            this._checkPropertyDefinition(document, position, token);
+    provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.LocationLink[] | null> {
+        let result: Promise<vscode.LocationLink[] | null> | vscode.LocationLink[] | null = null;
+
+        return this._pug.getToken(document, position)
+            .then(pugToken => {
+                if (pugToken) {
+                    switch (pugToken.type) {
+                        case "path":
+                            if (typeof pugToken.val === 'string') {
+                                result = this._checkIncludesUri(document, pugToken.val, pugLocationToRange(pugToken.loc), token);
+                            }
+                            break;
+                        case "call":
+                            if (typeof pugToken.val === 'string' && position.character <= pugToken.loc.start.column + pugToken.val.length) {
+                                result = this._checkMixinsUri(document, <string>pugToken.val, pugLocationToRange(pugToken.loc, pugToken.val.length + 1), token);
+                            } else {
+                                result = this._checkFunctionDefinition(document, position, token) ||
+                                    this._checkPropertyDefinition(document, position, token);
+                            }
+                            break;
+                        case "tag":
+                            if (typeof pugToken.val === 'string') {
+                                result = this._checkNgSelectorUri(pugToken.val, pugLocationToRange(pugToken.loc), token);
+                            }
+                            break;
+                        case 'class':
+                        case 'code':
+                        case 'interpolated-code':
+                        case 'mixin':
+                            break;
+                        case "attribute":
+                            if (pugToken.name) {
+                                if (pugToken.loc.start.column + pugToken.name.length - 1 >= position.character) {
+                                    const attributeName: string = pugToken.name;
+                                    if (typeof pugToken.val === 'string' || typeof pugToken.val === 'number') {
+                                        result = this._pug.getSelector(document, <PugAttributeToken>pugToken)
+                                            .then(selector => this._checkTagAttributeSelectorUri(attributeName,
+                                                selector, pugLocationToRange(pugToken.loc, attributeName.length),
+                                                token));
+                                    } else if (pugToken.val === true && !attributeName.startsWith('[') && !attributeName.startsWith('(') && !attributeName.startsWith('*')) {
+                                        result = this._checkNgSelectorUri(`[${attributeName}]`, pugLocationToRange(pugToken.loc), token);
+                                    }
+                                } else {
+                                    result = this._checkFunctionDefinition(document, position, token) ||
+                                        this._checkPropertyDefinition(document, position, token);
+                                }
+                            }
+                            break;
+                        case 'text':
+                        default:
+                            // console.log(pugToken.type, '---', pugToken.val);
+                            result = this._checkFunctionDefinition(document, position, token) ||
+                                this._checkPropertyDefinition(document, position, token);
+                            break;
+                    }
+                }
+                return result;
+            });
     }
 
 }

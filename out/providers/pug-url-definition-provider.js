@@ -4,52 +4,40 @@ const vscode = require("vscode");
 const get_file_location_or_null_1 = require("../utils/get-file-location-or-null");
 const get_full_path_or_null_1 = require("../utils/get-full-path-or-null");
 const timers_1 = require("timers");
+const pug_service_1 = require("../services/pug-service");
+const pug_location_to_range_1 = require("../utils/pug-location-to-range");
 class PugUrlDefinitionProvider {
     constructor() {
-        this._tagNameRegex = /^(?!include|\.|#|\/\/)(?:\s+)?([a-zA-Z0-9_$-]+)((?:\.[a-zA-Z_-]+)+)?(?:\(|\s|$)[^,\)]/gm;
-        this._tagAttributesRegex = /[a-zA-Z_$]((?:\s+)?\((?:(?:(?:\s+)?[^\s]+(?:\s+)?=(?:\s+)?(?:(?:(['"])[^\n\r]+\2)|(?:require(?:\s+)?\(["'][^\s"']+["']\)))\,?)|(?:(?:\s+)?(?:#|)[a-zA-Z-_]+)\,?(?:\s+)?)+\))/gm;
-        this._attributeSelectorRegex = /(\[[$a-zA-Z0-9_]+\]|\[\([$a-zA-Z0-9_]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_]+)(?:(?:\s+)*=(?:\s+)*((["'])[^\n\r]+\3)?|\,|(?:\s+)?\))/g;
         this._tagUriCache = {};
         this._tagClearCacheTimeout = {};
         this._templateUrlCache = {};
         this._templateUrlClearCacheTimeout = {};
-        this._pug = vscode.extensions.getExtension('vscode.pug');
+        this._pug = new pug_service_1.PugService();
         /* empty */
     }
-    _checkIncludesUri(document, position, token) {
-        const wordRange = document.getWordRangeAtPosition(position, /[\s+]?include[\s]+((?:(?:[^<>:;,?"*|\\\/\n\r]+)?[\\\/](?:[^<>:;,?"*|\\\/\n\r]+))+)/g);
-        let result;
-        if (wordRange !== null && wordRange !== undefined) {
-            let relativeUri = document.getText(wordRange);
-            let match = /[\s+]?include[\s]+((?:(?:[^<>:;,?"*|\\\/\n\r]+)?[\\\/](?:[^<>:;,?"*|\\\/\n\r]+))+)/g.exec(relativeUri);
-            if (match !== null) {
-                relativeUri = match[1];
-            }
-            if (relativeUri !== null && relativeUri !== undefined) {
-                if (relativeUri.endsWith('.pug') || relativeUri.endsWith('.jade')) {
-                    result = get_file_location_or_null_1.getFileLocationOrNull(document, position, relativeUri);
-                }
-                else {
-                    result = new Promise(resolve => {
-                        Promise.all([
-                            get_file_location_or_null_1.getFileLocationOrNull(document, position, `${relativeUri}.pug`),
-                            get_file_location_or_null_1.getFileLocationOrNull(document, position, `${relativeUri}.jade`)
-                        ]).then(results => {
-                            for (let result of results) {
-                                if (result) {
-                                    resolve(result);
-                                    return;
-                                }
-                            }
-                            resolve(null);
-                        }).catch(errors => {
-                            resolve(null);
-                        });
-                    });
-                }
+    _checkIncludesUri(document, relativeUri, wordRange, token) {
+        let result = null;
+        if (relativeUri !== null && relativeUri !== undefined && wordRange !== null && wordRange !== undefined) {
+            if (relativeUri.endsWith('.pug') || relativeUri.endsWith('.jade')) {
+                result = get_file_location_or_null_1.getFileLocationOrNull(document, wordRange, relativeUri);
             }
             else {
-                result = null;
+                result = new Promise(resolve => {
+                    Promise.all([
+                        get_file_location_or_null_1.getFileLocationOrNull(document, wordRange, `${relativeUri}.pug`),
+                        get_file_location_or_null_1.getFileLocationOrNull(document, wordRange, `${relativeUri}.jade`)
+                    ]).then(results => {
+                        for (let result of results) {
+                            if (result) {
+                                resolve(result);
+                                return;
+                            }
+                        }
+                        resolve(null);
+                    }).catch(errors => {
+                        resolve(null);
+                    });
+                });
             }
         }
         else {
@@ -135,57 +123,45 @@ class PugUrlDefinitionProvider {
             });
         });
     }
-    _checkMixinsUri(document, position, token) {
-        const wordRange = document.getWordRangeAtPosition(position, /^(?:[\s]+)?\+([^()\+\s]+)/gm);
+    _checkMixinsUri(document, mixinName, wordRange, token) {
         let result;
-        if (wordRange !== null && wordRange !== undefined) {
-            let mixinName = document.getText(wordRange);
-            let match = /\+[^+\(\s]+/g.exec(mixinName);
-            if (match !== null) {
-                mixinName = match[0];
-            }
-            if (mixinName !== null && mixinName !== undefined) {
-                result = new Promise(resolve => {
-                    let filePaths = [
-                        document.fileName
-                    ];
-                    const findMixinTasks = [];
-                    const links = [];
-                    this._getIncludesPaths(document)
-                        .then(paths => {
-                        filePaths = [...filePaths, ...paths];
-                        let range = (match !== null && match !== undefined) ? new vscode.Range(new vscode.Position(wordRange.start.line, match.index), new vscode.Position(wordRange.start.line, match.index + match[0].length)) : wordRange;
-                        for (let path of filePaths) {
-                            findMixinTasks.push(this._checkFileContainsMixin(mixinName, path, range));
+        if (mixinName !== null && mixinName !== undefined && wordRange !== null && wordRange !== undefined) {
+            result = new Promise(resolve => {
+                let filePaths = [
+                    document.fileName
+                ];
+                const findMixinTasks = [];
+                const links = [];
+                this._getIncludesPaths(document)
+                    .then(paths => {
+                    filePaths = [...filePaths, ...paths];
+                    for (let path of filePaths) {
+                        findMixinTasks.push(this._checkFileContainsMixin(mixinName, path, wordRange));
+                    }
+                    Promise.all(findMixinTasks)
+                        .then(results => {
+                        for (let result of results) {
+                            if (result !== null && result !== undefined) {
+                                links.push(result);
+                            }
                         }
-                        Promise.all(findMixinTasks)
-                            .then(results => {
-                            for (let result of results) {
-                                if (result !== null && result !== undefined) {
-                                    links.push(result);
-                                }
-                            }
-                            resolve(links);
-                        }).catch(errors => {
-                            if (errors !== null && errors !== undefined) {
-                                console.error(errors);
-                            }
-                            resolve(null);
-                        });
+                        resolve(links);
                     }).catch(errors => {
                         if (errors !== null && errors !== undefined) {
                             console.error(errors);
                         }
                         resolve(null);
                     });
-                }).catch(e => {
-                    console.error(e);
-                    return e;
+                }).catch(errors => {
+                    if (errors !== null && errors !== undefined) {
+                        console.error(errors);
+                    }
+                    resolve(null);
                 });
-            }
-            else {
-                result = null;
-            }
+            }).catch(e => {
+                console.error(e);
+                return e;
+            });
         }
         else {
             result = null;
@@ -403,180 +379,56 @@ class PugUrlDefinitionProvider {
             });
         });
     }
-    _checkNgSelectorUri(document, position, token) {
-        const tagNameRegex = /^(?:\s+)?([a-zA-Z0-9_$-]+)((?:\.[a-zA-Z_0-9-]+)+)?(?:\(|\s|$)[^,\)]*/;
-        const wordRange = document.getWordRangeAtPosition(position, tagNameRegex);
+    _checkNgSelectorUri(selector, wordRange, token) {
         let result = null;
         if (wordRange !== null && wordRange !== undefined) {
-            const line = document.lineAt(wordRange.start);
-            let tagMatch = /^(?:((?!include|\.)(?:\s+))?([a-zA-Z0-9_-]+))/.exec(line.text);
-            const tagNameStart = tagMatch && tagMatch[1] && tagMatch[1].length || 0;
-            const tagNameEnd = tagNameStart + (tagMatch && tagMatch[2] && tagMatch[2].length || 0);
-            if (tagMatch && position.character >= tagNameStart && position.character <= tagNameEnd) {
-                const tagName = tagMatch[2];
-                const originSelectionRange = new vscode.Range(new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex), new vscode.Position(line.lineNumber, line.firstNonWhitespaceCharacterIndex + (tagName && tagName.length || 0)));
-                result = this._findLocationsWithSelector(tagName, originSelectionRange, token)
-                    .then(result => result.links);
-            }
+            result = this._findLocationsWithSelector(selector, wordRange, token)
+                .then(result => result.links);
         }
         return result;
     }
-    _findSelectorName(document, position) {
-        let result = {
-            tag: null,
-            attribute: null
-        };
-        const tagNameRegex = new RegExp(this._tagNameRegex, "gm");
-        const attributeSelectorRegex = new RegExp(this._attributeSelectorRegex, "g");
-        const isEndOfDeclaration = (line) => {
-            let result = false;
-            let openedCount = 0;
-            tagNameRegex.lastIndex = 0;
-            if (tagNameRegex.test(line)) {
-                tagNameRegex.lastIndex = 0;
-                result = true;
+    _checkTagAttributeSelectorUri(attributeName, selector, wordRange, token) {
+        let result = null;
+        if (selector.attribute && wordRange !== null && wordRange !== undefined) {
+            const searchTasks = [];
+            if (selector.tag) {
+                searchTasks.push(this._findLocationsWithSelector(selector.tag, wordRange, token));
             }
-            else {
-                for (let i = 0, l = line.length; i < l; ++i) {
-                    if (line[i] === ')') {
-                        if (--openedCount < 0) {
-                            result = true;
-                            break;
+            if (selector.attribute !== null && selector.attribute !== undefined && !selector.attribute.startsWith('[') && !selector.attribute.startsWith('(') && !selector.attribute.startsWith('*')) {
+                searchTasks.push(this._findLocationsWithSelector(`[${selector.attribute}]`, wordRange, token));
+            }
+            result = new Promise(resolve => {
+                Promise.all(searchTasks)
+                    .then(results => {
+                    let searchAttributeTasks = [];
+                    for (let taskResult of results) {
+                        if (taskResult.links) {
+                            for (let location of taskResult.links) {
+                                searchAttributeTasks.push(this._findAttributeWithSelector(location.targetUri, attributeName, wordRange, token));
+                            }
                         }
                     }
-                    else if (line[i] === '(') {
-                        ++openedCount;
-                    }
-                }
-            }
-            return result;
-        };
-        const isBeginningOfDeclaration = (line) => {
-            return /^(?:\s+)?[.#a-zA-Z_-]+\(/.test(line);
-        };
-        let searchText = document.lineAt(position.line).text;
-        let upLine = position.line;
-        let downLine = position.line;
-        let tagMatch = tagNameRegex.exec(searchText);
-        let attributeMatch = attributeSelectorRegex.exec(searchText);
-        let foundTag = tagMatch && tagMatch[1] || null;
-        let foundAttribute = attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
-        let range = new vscode.Range(new vscode.Position(upLine, 0), new vscode.Position(downLine, 0));
-        let wentToEnd = false;
-        let wentToBeginning = false;
-        let count = 0;
-        while (foundAttribute === null && downLine < document.lineCount - 1 && !wentToEnd) {
-            tagNameRegex.lastIndex = 0;
-            attributeSelectorRegex.lastIndex = 0;
-            range = new vscode.Range(new vscode.Position(upLine, 0), new vscode.Position(downLine, document.lineAt(Math.min(downLine, document.lineCount)).text.length));
-            searchText = document.getText(document.validateRange(range));
-            tagMatch = tagNameRegex.exec(searchText);
-            attributeMatch = attributeSelectorRegex.exec(searchText);
-            foundTag = foundTag || tagMatch && tagMatch[1] || null;
-            foundAttribute = foundAttribute || attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
-            if (isEndOfDeclaration(document.lineAt(downLine).text)) {
-                wentToEnd = true;
-            }
-            else {
-                downLine++;
-            }
-            if (++count > 100) {
-                break;
-            }
-        }
-        while (foundTag === null && upLine > 0 && !wentToBeginning) {
-            tagNameRegex.lastIndex = 0;
-            attributeSelectorRegex.lastIndex = 0;
-            range = new vscode.Range(new vscode.Position(upLine, 0), new vscode.Position(downLine, document.lineAt(Math.min(downLine, document.lineCount)).text.length));
-            searchText = document.getText(document.validateRange(range));
-            tagMatch = tagNameRegex.exec(searchText);
-            attributeMatch = attributeSelectorRegex.exec(searchText);
-            foundTag = foundTag || tagMatch && tagMatch[1] || null;
-            foundAttribute = foundAttribute || attributeMatch && !attributeMatch[2] && !attributeMatch[3] && attributeMatch[1] || null;
-            if (isBeginningOfDeclaration(document.lineAt(upLine).text)) {
-                wentToBeginning = true;
-            }
-            else {
-                upLine--;
-            }
-            if (++count > 100) {
-                break;
-            }
-        }
-        result = {
-            tag: foundTag,
-            attribute: foundAttribute
-        };
-        return result;
-    }
-    _checkTagAttributeSelectorUri(document, position, token) {
-        const attributeSelectorRegex = /\[[$a-zA-Z0-9_]+\]|\[\([$a-zA-Z0-9_]+\)\]|\([$a-zA-Z0-9_]+\)|[$a-zA-Z0-9_]+/;
-        const wordRange = document.getWordRangeAtPosition(position, attributeSelectorRegex);
-        let result = null;
-        const attributeName = document.getText(wordRange);
-        if (wordRange !== null && wordRange !== undefined) {
-            const line = document.lineAt(wordRange.start);
-            const checkRegex = new RegExp(`${attributeName.replace(/(\[|\(|\]|\))/g, '\\$1')}(?:\\s*=\\s*(?:require\\s*\\()?((["'])(?:[^\\n\\r]*|([\\[{])[^\\n\\r]+[\\]}])\\2))?(?:,|\\s*\\))(?!"|')`);
-            const match = checkRegex.exec(line.text);
-            if (match) {
-                if (match[1] === null || match[1] === undefined) {
-                    if (!attributeName.startsWith('[')) {
-                        result = this._findLocationsWithSelector(`[${attributeName}]`, wordRange, token)
-                            .then(result => result.links);
-                    }
-                    else {
-                        result = this._findLocationsWithSelector(attributeName, wordRange, token)
-                            .then(result => result.links);
-                    }
-                }
-                else {
-                    const selector = this._findSelectorName(document, position);
-                    let searchTasks = [];
-                    if (selector.tag) {
-                        searchTasks.push(this._findLocationsWithSelector(selector.tag, wordRange, token));
-                    }
-                    if (selector.attribute !== null && selector.attribute !== undefined) {
-                        if (!selector.attribute.startsWith('[')) {
-                            searchTasks.push(this._findLocationsWithSelector(`[${selector.attribute}]`, wordRange, token));
+                    Promise.all(searchAttributeTasks)
+                        .then(attributeResults => {
+                        let locations = [];
+                        for (let result of attributeResults) {
+                            if (result.location !== null && result.location !== undefined) {
+                                locations.push(result.location);
+                            }
+                        }
+                        if (locations.length > 0) {
+                            resolve(locations);
                         }
                         else {
-                            searchTasks.push(this._findLocationsWithSelector(selector.attribute, wordRange, token));
-                        }
-                    }
-                    result = new Promise(resolve => {
-                        Promise.all(searchTasks)
-                            .then(results => {
-                            let searchAttributeTasks = [];
-                            for (let taskResult of results) {
-                                if (taskResult.links) {
-                                    for (let location of taskResult.links) {
-                                        searchAttributeTasks.push(this._findAttributeWithSelector(location.targetUri, attributeName, wordRange, token));
-                                    }
-                                }
-                            }
-                            Promise.all(searchAttributeTasks)
-                                .then(attributeResults => {
-                                let locations = [];
-                                for (let result of attributeResults) {
-                                    if (result.location !== null && result.location !== undefined) {
-                                        locations.push(result.location);
-                                    }
-                                }
-                                if (locations.length > 0) {
-                                    resolve(locations);
-                                }
-                                else {
-                                    resolve(null);
-                                }
-                            }).catch(() => {
-                                resolve(null);
-                            });
-                        }).catch(() => {
                             resolve(null);
-                        });
+                        }
+                    }).catch(() => {
+                        resolve(null);
                     });
-                }
-            }
+                }).catch(() => {
+                    resolve(null);
+                });
+            });
         }
         return result;
     }
@@ -894,12 +746,63 @@ class PugUrlDefinitionProvider {
         return result;
     }
     provideDefinition(document, position, token) {
-        return this._checkIncludesUri(document, position, token) ||
-            this._checkMixinsUri(document, position, token) ||
-            this._checkNgSelectorUri(document, position, token) ||
-            this._checkTagAttributeSelectorUri(document, position, token) ||
-            this._checkFunctionDefinition(document, position, token) ||
-            this._checkPropertyDefinition(document, position, token);
+        let result = null;
+        return this._pug.getToken(document, position)
+            .then(pugToken => {
+            if (pugToken) {
+                switch (pugToken.type) {
+                    case "path":
+                        if (typeof pugToken.val === 'string') {
+                            result = this._checkIncludesUri(document, pugToken.val, pug_location_to_range_1.pugLocationToRange(pugToken.loc), token);
+                        }
+                        break;
+                    case "call":
+                        if (typeof pugToken.val === 'string' && position.character <= pugToken.loc.start.column + pugToken.val.length) {
+                            result = this._checkMixinsUri(document, pugToken.val, pug_location_to_range_1.pugLocationToRange(pugToken.loc, pugToken.val.length + 1), token);
+                        }
+                        else {
+                            result = this._checkFunctionDefinition(document, position, token) ||
+                                this._checkPropertyDefinition(document, position, token);
+                        }
+                        break;
+                    case "tag":
+                        if (typeof pugToken.val === 'string') {
+                            result = this._checkNgSelectorUri(pugToken.val, pug_location_to_range_1.pugLocationToRange(pugToken.loc), token);
+                        }
+                        break;
+                    case 'class':
+                    case 'code':
+                    case 'interpolated-code':
+                    case 'mixin':
+                        break;
+                    case "attribute":
+                        if (pugToken.name) {
+                            if (pugToken.loc.start.column + pugToken.name.length - 1 >= position.character) {
+                                const attributeName = pugToken.name;
+                                if (typeof pugToken.val === 'string' || typeof pugToken.val === 'number') {
+                                    result = this._pug.getSelector(document, pugToken)
+                                        .then(selector => this._checkTagAttributeSelectorUri(attributeName, selector, pug_location_to_range_1.pugLocationToRange(pugToken.loc, attributeName.length), token));
+                                }
+                                else if (pugToken.val === true && !attributeName.startsWith('[') && !attributeName.startsWith('(') && !attributeName.startsWith('*')) {
+                                    result = this._checkNgSelectorUri(`[${attributeName}]`, pug_location_to_range_1.pugLocationToRange(pugToken.loc), token);
+                                }
+                            }
+                            else {
+                                result = this._checkFunctionDefinition(document, position, token) ||
+                                    this._checkPropertyDefinition(document, position, token);
+                            }
+                        }
+                        break;
+                    case 'text':
+                    default:
+                        // console.log(pugToken.type, '---', pugToken.val);
+                        result = this._checkFunctionDefinition(document, position, token) ||
+                            this._checkPropertyDefinition(document, position, token);
+                        break;
+                }
+            }
+            return result;
+        });
     }
 }
 exports.PugUrlDefinitionProvider = PugUrlDefinitionProvider;
