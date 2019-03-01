@@ -58,14 +58,26 @@ class PugService {
         return __awaiter(this, void 0, void 0, function* () {
             let result = {
                 tag: null,
-                attribute: token.name
+                attribute: null
             };
             const tokens = yield this.parse(document);
-            let index = tokens.indexOf(token);
-            while (--index > 0 && (tokens[index].type === 'attribute' || tokens[index].type === 'start-attributes' ||
-                tokens[index].type === 'class' || tokens[index].type === 'id')) { /* loop */ }
-            if (index >= 0 && tokens[index].type === 'tag' && typeof tokens[index].val === 'string') {
-                result.tag = tokens[index].val;
+            let tagIndex = tokens.indexOf(token);
+            let attributeIndex = tagIndex;
+            do {
+                if (tokens[tagIndex].type === 'attribute' && tokens[tagIndex].val === true &&
+                    tokens[tagIndex].name !== undefined && !/\[|\]|\(|\)|\*|\#|\@/.test(tokens[tagIndex].name)) {
+                    result.attribute = tokens[tagIndex].name;
+                }
+            } while (--tagIndex > 0 && (tokens[tagIndex].type === 'attribute' || tokens[tagIndex].type === 'start-attributes' ||
+                tokens[tagIndex].type === 'class' || tokens[tagIndex].type === 'id'));
+            do {
+                if (tokens[attributeIndex].type === 'attribute' && tokens[attributeIndex].val === true &&
+                    tokens[attributeIndex].name !== undefined && !/\[|\]|\(|\)|\*|\#|\@/.test(tokens[attributeIndex].name)) {
+                    result.attribute = tokens[attributeIndex].name;
+                }
+            } while (++attributeIndex < tokens.length && tokens[attributeIndex].type === 'attribute');
+            if (tagIndex >= 0 && tokens[tagIndex].type === 'tag' && typeof tokens[tagIndex].val === 'string') {
+                result.tag = tokens[tagIndex].val;
             }
             return result;
         });

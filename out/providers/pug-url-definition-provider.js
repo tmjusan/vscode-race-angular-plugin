@@ -389,7 +389,7 @@ class PugUrlDefinitionProvider {
     }
     _checkTagAttributeSelectorUri(attributeName, selector, wordRange, token) {
         let result = null;
-        if (selector.attribute && wordRange !== null && wordRange !== undefined) {
+        if (attributeName && wordRange !== null && wordRange !== undefined) {
             const searchTasks = [];
             if (selector.tag) {
                 searchTasks.push(this._findLocationsWithSelector(selector.tag, wordRange, token));
@@ -783,7 +783,7 @@ class PugUrlDefinitionProvider {
                                     result = this._pug.getSelector(document, pugToken)
                                         .then(selector => this._checkTagAttributeSelectorUri(attributeName, selector, pug_location_to_range_1.pugLocationToRange(pugToken.loc, attributeName.length), token));
                                 }
-                                else if (pugToken.val === true && !attributeName.startsWith('[') && !attributeName.startsWith('(') && !attributeName.startsWith('*')) {
+                                else if (pugToken.val === true && !/\[|\]|\(|\)|\*|\#|\@/.test(attributeName)) {
                                     result = this._checkNgSelectorUri(`[${attributeName}]`, pug_location_to_range_1.pugLocationToRange(pugToken.loc), token);
                                 }
                             }

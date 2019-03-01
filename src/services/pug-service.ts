@@ -6,7 +6,7 @@ const lex = require('pug-lexer');
 
 export class PugService {
 
-    private _lexCache: {[path: string]: Array<PugToken>} = {};
+    private _lexCache: { [path: string]: Array<PugToken> } = {};
 
     constructor() {
         workspace.onDidSaveTextDocument(document => {
@@ -38,7 +38,7 @@ export class PugService {
         const tokens = await this.parse(document);
         let result: PugToken | null = null;
         for (let token of tokens) {
-            if (token.loc.start.line >= position.line + 1 && token.loc.end.line <= position.line + 1&&
+            if (token.loc.start.line >= position.line + 1 && token.loc.end.line <= position.line + 1 &&
                 token.loc.start.column <= position.character + 1 && token.loc.end.column >= position.character + 1) {
                 result = token;
                 break;
@@ -50,14 +50,29 @@ export class PugService {
     async getSelector(document: TextDocument, token: PugAttributeToken): Promise<FindSelectorResult> {
         let result: FindSelectorResult = {
             tag: null,
-            attribute: token.name
+            attribute: null
         };
         const tokens = await this.parse(document);
-        let index: number = tokens.indexOf(token);
-        while (--index > 0 && (tokens[index].type === 'attribute' || tokens[index].type === 'start-attributes' || 
-            tokens[index].type === 'class' || tokens[index].type === 'id')) { /* loop */ }
-        if (index >= 0 && tokens[index].type === 'tag' && typeof tokens[index].val === 'string') {
-            result.tag = <string>tokens[index].val;
+        let tagIndex: number = tokens.indexOf(token);
+        let attributeIndex: number = tagIndex;
+
+        do {
+            if (tokens[tagIndex].type === 'attribute' && tokens[tagIndex].val === true &&
+                tokens[tagIndex].name !== undefined && !/\[|\]|\(|\)|\*|\#|\@/.test(<string>tokens[tagIndex].name)) {
+                result.attribute = <string>tokens[tagIndex].name;
+            }
+        } while (--tagIndex > 0 && (tokens[tagIndex].type === 'attribute' || tokens[tagIndex].type === 'start-attributes' ||
+            tokens[tagIndex].type === 'class' || tokens[tagIndex].type === 'id'));
+
+        do {
+            if (tokens[attributeIndex].type === 'attribute' && tokens[attributeIndex].val === true &&
+                tokens[attributeIndex].name !== undefined && !/\[|\]|\(|\)|\*|\#|\@/.test(<string>tokens[attributeIndex].name)) {
+                result.attribute = <string>tokens[attributeIndex].name;
+            }
+        } while (++attributeIndex < tokens.length && tokens[attributeIndex].type === 'attribute');
+
+        if (tagIndex >= 0 && tokens[tagIndex].type === 'tag' && typeof tokens[tagIndex].val === 'string') {
+            result.tag = <string>tokens[tagIndex].val;
         }
         return result;
     }

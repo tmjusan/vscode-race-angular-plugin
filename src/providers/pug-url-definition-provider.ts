@@ -430,7 +430,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
     private _checkTagAttributeSelectorUri(attributeName: string, selector: FindSelectorResult, wordRange: vscode.Range, token: vscode.CancellationToken): Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null {
         let result: Promise<Array<vscode.LocationLink> | null> | Array<vscode.LocationLink> | null = null;
 
-        if (selector.attribute && wordRange !== null && wordRange !== undefined) {
+        if (attributeName && wordRange !== null && wordRange !== undefined) {
             const searchTasks: Array<Promise<FindLocationResult>> = [];
             if (selector.tag) {
                 searchTasks.push(this._findLocationsWithSelector(selector.tag, wordRange, token));
@@ -874,7 +874,7 @@ export class PugUrlDefinitionProvider implements vscode.DefinitionProvider {
                                             .then(selector => this._checkTagAttributeSelectorUri(attributeName,
                                                 selector, pugLocationToRange(pugToken.loc, attributeName.length),
                                                 token));
-                                    } else if (pugToken.val === true && !attributeName.startsWith('[') && !attributeName.startsWith('(') && !attributeName.startsWith('*')) {
+                                    } else if (pugToken.val === true && !/\[|\]|\(|\)|\*|\#|\@/.test(attributeName)) {
                                         result = this._checkNgSelectorUri(`[${attributeName}]`, pugLocationToRange(pugToken.loc), token);
                                     }
                                 } else {
